@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Content Browser</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <h1>Content Browser</h1>
+    <div class="header-actions">
+      <button id="refreshBtn" class="btn">Refresh</button>
+      <button id="settingsBtn" class="btn">Settings</button>
+      <span id="status" class="status"></span>
+    </div>
+  </header>
+  <main class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <span class="folder-label">/content</span>
+      </div>
+      <div id="tree" class="tree"></div>
+    </aside>
+    <section class="viewer">
+      <div class="viewer-header">
+        <span class="path">Selected:</span>
+        <span id="currentPath" class="path"></span>
+        <div class="spacer"></div>
+        <button id="generateBtn" class="btn" disabled>Generate Subs</button>
+      </div>
+      <div class="empty">Select a file or folder on the left, then click Generate Subs. The selection path will be sent to the server and logged.</div>
+    </section>
+  </main>
+      </div>
+      <div class="tips">
+        <div>• Click a file or folder in the tree to select it.</div>
+        <div>• Generate Subs logs the selected path on the server.</div>
+      </div>
+    </section>
+  </main>
+  <footer class="app-footer">
+    <span>Subgen UI</span>
+  </footer>
+  <!-- Settings Modal -->
+  <div id="settingsModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="settingsTitle">Subgen Server Settings</h2>
+      </div>
+      <form id="settingsForm" class="modal-body">
+        <div class="field">
+          <label for="serverHost">Server IP / Host</label>
+          <input id="serverHost" name="serverHost" type="text" placeholder="127.0.0.1" />
+        </div>
+        <div class="field">
+          <label for="serverPort">Server Port</label>
+          <input id="serverPort" name="serverPort" type="number" min="1" max="65535" placeholder="9000" />
+        </div>
+        <div class="field">
+          <label for="defaultLanguage">Default Language</label>
+          <select id="defaultLanguage" name="defaultLanguage">
+            <option value="en">English</option>
+            <option value="es">Spanish</option>
+            <option value="fr">French</option>
+            <option value="de">German</option>
+            <option value="hi">Hindi</option>
+            <option value="ja">Japanese</option>
+          </select>
+        </div>
+        <div class="modal-actions">
+          <button type="button" id="cancelSettings" class="btn btn-secondary">Cancel</button>
+          <button type="submit" class="btn">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>

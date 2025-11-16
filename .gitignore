@@ -1,0 +1,16 @@
+node_modules
+content
+user-settings.json
+.DS_Store
+.vscode
+dist
+.env
+.env.local
+.env.*.local
+.idea
+*.log
+*.tmp
+.cache
+*.bak
+*.swp
+Thumbs.db
