@@ -40,11 +40,11 @@ These are saved in `user-settings.json` at the project root. You can open the se
 
 ## Generation
 Click "Generate Subs" after selecting a file or folder. The app will:
-1. Call `POST /api/select` to validate selection.
-2. Issue a `POST` (no body) to:
+1. Call `POST /api/select` to validate selection and receive the resolved absolute path (logged server-side).
+2. Issue a direct `POST` (no body) from the browser to:
 	`http://<serverHost>:<serverPort>/batch?directory=/content/<relativePath>&forceLanguage=<langCode>`
 
-The `directory` parameter is always container-relative (never the host absolute path). Root selection would use `/content`.
+The `directory` query parameter is container-relative (never the host absolute path). Root selection uses `/content`. If you encounter CORS issues from the browser, you can re-introduce a server-side proxy endpoint later.
 
 Where `<langCode>` is the stored language (e.g. `en`). Ensure your Subgen server supports CORS if it is on a different origin; if not, proxy the request through the Express server.
 
@@ -76,13 +76,7 @@ docker compose down
 
 ### Persisting Settings
 
-`user-settings.json` is written within the container filesystem. To persist across container recreations, you can mount it:
-
-```yaml
-		volumes:
-			- ./content:/app/content:rw
-			- ./user-settings.json:/app/user-settings.json:rw
-```
+Settings now live in `config/user-settings.json`. The compose file mounts `./config` to `/app/config` (rw) so changes persist. If migrating from an older version that stored `user-settings.json` at the project root, the server will auto-migrate it into `config/` on first run.
 
 ### Rebuild After Code Changes
 

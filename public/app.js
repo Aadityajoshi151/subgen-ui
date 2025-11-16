@@ -125,19 +125,24 @@ async function sendSelection() {
   }
   try {
     setStatus('Preparing…');
+    // Validate selection on server (still logs absolute path)
     const selRes = await postJSON('/api/select', { path: selected.path, type: selected.type });
     if (!selRes.ok) throw new Error(`Selection HTTP ${selRes.status}`);
     const selData = await selRes.json();
-    // Use container-relative path under /content instead of absolute host path
+    // Build remote URL directly (may trigger CORS if different origin)
     const relativeForContainer = `/content/${selected.path || ''}`.replace(/\/+$/,'');
     const directoryParam = encodeURIComponent(relativeForContainer);
     const lang = encodeURIComponent(settings.defaultLanguage || 'en');
     const remoteUrl = `http://${settings.serverHost}:${settings.serverPort}/batch?directory=${directoryParam}&forceLanguage=${lang}`;
+    console.log('[Generate Subs] Remote URL:', remoteUrl);
+    console.log('[Generate Subs] Params:', { directoryParam: relativeForContainer, lang });
     setStatus('Calling Subgen server…');
     const remoteRes = await fetch(remoteUrl, { method: 'POST' });
+    console.log('[Generate Subs] Response status:', remoteRes.status);
     if (!remoteRes.ok) throw new Error(`Remote HTTP ${remoteRes.status}`);
     setStatus('Subs generation triggered');
   } catch (e) {
+    console.error('[Generate Subs] Error:', e);
     setStatus(e.message || 'Failed to generate');
   }
 }

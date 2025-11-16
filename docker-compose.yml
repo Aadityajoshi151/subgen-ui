@@ -7,6 +7,7 @@ services:
       - "8585:8585"
     volumes:
       - ./content:/app/content:ro
+      - ./config:/app/config:rw
     environment:
       - NODE_ENV=production
     restart: unless-stopped
