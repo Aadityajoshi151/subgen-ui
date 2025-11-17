@@ -112,9 +112,19 @@ async function loadTree() {
     setStatus('Loading…');
     const data = await fetchJSON('/api/tree');
     renderTree(data);
+    // Clear any previous selection on refresh
+    selected = { path: null, type: null };
+    selectedEl = null;
+    currentPathEl.textContent = 'None';
+    generateBtn.disabled = true;
     setStatus('');
   } catch (e) {
     setStatus('Failed to load tree');
+    // Also clear selection if load fails so stale paths aren't used
+    selected = { path: null, type: null };
+    selectedEl = null;
+    currentPathEl.textContent = 'None';
+    generateBtn.disabled = true;
   }
 }
 

@@ -39,6 +39,8 @@ body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,C
 
 /* Viewer panel (selection summary + actions) */
 .btn.btn-sm{padding:5px 8px;font-size:11px;border-radius:8px}
+#generateBtn{border-color:#059669;background:linear-gradient(180deg,#10b981,#059669);color:#f0fdf4}
+#generateBtn:hover{box-shadow:var(--shadow);transform:translateY(-1px);background:linear-gradient(180deg,#34d399,#10b981)}
 
 /* Modal for settings */
 .modal{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.45);backdrop-filter:blur(2px);padding:16px}
