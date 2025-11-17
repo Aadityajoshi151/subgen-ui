@@ -160,11 +160,16 @@ async function sendSelection() {
     const remoteUrl = `http://${settings.serverHost}:${settings.serverPort}/batch?directory=${directoryParam}&forceLanguage=${lang}`;
     console.log('[Generate Subs] Remote URL:', remoteUrl);
     console.log('[Generate Subs] Params:', { directoryParam: relativeForContainer, lang });
-    setStatus('Calling Subgen server…');
-    const remoteRes = await fetch(remoteUrl, { method: 'POST' });
-    console.log('[Generate Subs] Response status:', remoteRes.status);
-    if (!remoteRes.ok) throw new Error(`Remote HTTP ${remoteRes.status}`);
-    setStatus('Subs generation triggered');
+    // Fire-and-forget: do not await the response
+    setStatus('Sending…');
+    try {
+      fetch(remoteUrl, { method: 'POST', keepalive: true })
+        .catch(err => console.warn('[Generate Subs] Fire-and-forget error:', err));
+    } catch (ffErr) {
+      console.warn('[Generate Subs] Dispatch error:', ffErr);
+    }
+    alert('Generation request sent to Subgen server.');
+    setStatus('Sent');
   } catch (e) {
     console.error('[Generate Subs] Error:', e);
     setStatus(e.message || 'Failed to generate');
