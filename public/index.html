@@ -18,29 +18,18 @@
       <span id="status" class="status"></span>
     </div>
   </header>
-  <main class="layout">
-    <aside class="sidebar">
-      <div class="sidebar-header">
-        <span class="folder-label">/content</span>
+  <main class="tree-layout">
+    <div class="tree-header">
+      <span class="folder-label">/content</span>
+      <div class="tree-tools">
+        <button id="expandAllBtn" class="btn btn-sm" title="Expand all">Expand All</button>
+        <button id="collapseAllBtn" class="btn btn-sm" title="Collapse all">Collapse All</button>
+        <span class="selected-label">Selected:</span>
+        <span id="currentPath" class="selected-path">None</span>
+        <button id="generateBtn" class="btn btn-sm" disabled>Generate Subs</button>
       </div>
-      <div id="tree" class="tree"></div>
-    </aside>
-    <section class="viewer">
-      <div class="viewer-header">
-        <span class="path">Selected:</span>
-        <span id="currentPath" class="path"></span>
-        <div class="spacer"></div>
-        <button id="generateBtn" class="btn" disabled>Generate Subs</button>
-      </div>
-      <div class="empty">Select a file or folder on the left, then click Generate Subs. The selection path will be sent to the server and logged.</div>
-    </section>
-  </main>
-      </div>
-      <div class="tips">
-        <div>• Click a file or folder in the tree to select it.</div>
-        <div>• Generate Subs logs the selected path on the server.</div>
-      </div>
-    </section>
+    </div>
+    <div id="tree" class="tree tree-central"></div>
   </main>
   <footer class="app-footer">
     <span>Subgen UI</span>

@@ -4,6 +4,8 @@ const statusEl = document.getElementById('status');
 const refreshBtn = document.getElementById('refreshBtn');
 const generateBtn = document.getElementById('generateBtn');
 const settingsBtn = document.getElementById('settingsBtn');
+const expandAllBtn = document.getElementById('expandAllBtn');
+const collapseAllBtn = document.getElementById('collapseAllBtn');
 
 // Settings modal elements
 const settingsModal = document.getElementById('settingsModal');
@@ -92,6 +94,18 @@ function renderTree(root) {
   nodes.forEach(n => ul.appendChild(renderTreeNode(n)));
   treeEl.appendChild(ul);
 }
+
+function setAllFolders(expand) {
+  const folders = treeEl.querySelectorAll('.folder');
+  folders.forEach(f => {
+    f.classList.toggle('collapsed', !expand);
+    f.classList.toggle('expanded', expand);
+  });
+}
+
+expandAllBtn?.addEventListener('click', () => setAllFolders(true));
+collapseAllBtn?.addEventListener('click', () => setAllFolders(false));
+
 
 async function loadTree() {
   try {
