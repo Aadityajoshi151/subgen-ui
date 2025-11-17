@@ -41,6 +41,10 @@ body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,C
 .btn.btn-sm{padding:5px 8px;font-size:11px;border-radius:8px}
 #generateBtn{border-color:#059669;background:linear-gradient(180deg,#10b981,#059669);color:#f0fdf4}
 #generateBtn:hover{box-shadow:var(--shadow);transform:translateY(-1px);background:linear-gradient(180deg,#34d399,#10b981)}
+.confirm-path{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;color:#93c5fd;margin-top:8px;white-space:pre-wrap;word-break:break-all;overflow-wrap:anywhere;max-width:100%;max-height:40vh;overflow:auto}
+.confirm-target{display:flex;align-items:center;gap:8px;margin:8px 0;color:#cbd5e1}
+.confirm-icon{font-size:16px;line-height:1}
+.confirm-name{font-weight:600;color:#e2e8f0}
 
 /* Modal for settings */
 .modal{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.45);backdrop-filter:blur(2px);padding:16px}

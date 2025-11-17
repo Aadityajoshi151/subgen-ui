@@ -3,6 +3,7 @@ const currentPathEl = document.getElementById('currentPath');
 const statusEl = document.getElementById('status');
 const refreshBtn = document.getElementById('refreshBtn');
 const generateBtn = document.getElementById('generateBtn');
+const clearSelectionBtn = document.getElementById('clearSelectionBtn');
 const settingsBtn = document.getElementById('settingsBtn');
 const expandAllBtn = document.getElementById('expandAllBtn');
 const collapseAllBtn = document.getElementById('collapseAllBtn');
@@ -14,6 +15,14 @@ const cancelSettingsBtn = document.getElementById('cancelSettings');
 const inputHost = document.getElementById('serverHost');
 const inputPort = document.getElementById('serverPort');
 const selectLang = document.getElementById('defaultLanguage');
+
+// Confirm modal elements
+const confirmModal = document.getElementById('confirmModal');
+const confirmPathEl = document.getElementById('confirmPath');
+const confirmYesBtn = document.getElementById('confirmYes');
+const confirmNoBtn = document.getElementById('confirmNo');
+const confirmIconEl = document.getElementById('confirmIcon');
+const confirmNameEl = document.getElementById('confirmName');
 
 let selected = { path: null, type: null };
 let selectedEl = null;
@@ -137,6 +146,16 @@ function selectNode(el, relPath, type) {
   generateBtn.disabled = !selected.path;
 }
 
+function clearSelection() {
+  if (selectedEl) {
+    selectedEl.classList.remove('selected');
+  }
+  selectedEl = null;
+  selected = { path: null, type: null };
+  currentPathEl.textContent = 'None';
+  generateBtn.disabled = true;
+}
+
 async function sendSelection() {
   if (!selected.path) {
     setStatus('Select a file or folder first');
@@ -177,7 +196,31 @@ async function sendSelection() {
 }
 
 refreshBtn.addEventListener('click', loadTree);
-generateBtn.addEventListener('click', sendSelection);
+clearSelectionBtn?.addEventListener('click', clearSelection);
+
+function showConfirmModal(pathToSend) {
+  confirmPathEl.textContent = pathToSend || '';
+  const isFolder = selected?.type === 'folder';
+  confirmIconEl.textContent = isFolder ? '📁' : '📄';
+  const name = (selected?.path || '').split('/').filter(Boolean).pop() || (isFolder ? 'Folder' : 'File');
+  confirmNameEl.textContent = name;
+  confirmModal.classList.remove('hidden');
+}
+function hideConfirmModal() {
+  confirmModal.classList.add('hidden');
+}
+
+generateBtn.addEventListener('click', (e) => {
+  if (!selected.path) return; // safety; button should be disabled anyway
+  const relativeForContainer = `/content/${selected.path || ''}`.replace(/\/+$/,'');
+  showConfirmModal(relativeForContainer);
+});
+
+confirmNoBtn?.addEventListener('click', hideConfirmModal);
+confirmYesBtn?.addEventListener('click', async () => {
+  hideConfirmModal();
+  await sendSelection();
+});
 
 // Settings modal logic
 function showSettingsModal() { settingsModal.classList.remove('hidden'); }

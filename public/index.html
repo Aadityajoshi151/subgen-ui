@@ -26,6 +26,7 @@
         <button id="collapseAllBtn" class="btn btn-sm" title="Collapse all">Collapse All</button>
         <span class="selected-label">Selected:</span>
         <span id="currentPath" class="selected-path">None</span>
+        <button id="clearSelectionBtn" class="btn btn-sm" title="Clear selection">Clear</button>
         <button id="generateBtn" class="btn btn-sm" disabled>Generate Subs</button>
       </div>
     </div>
@@ -65,6 +66,26 @@
           <button type="submit" class="btn">Save</button>
         </div>
       </form>
+    </div>
+  </div>
+  <!-- Confirm Modal -->
+  <div id="confirmModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="confirmTitle">Confirm Generation</h2>
+      </div>
+      <div class="modal-body">
+        <p>Send this path to the server?</p>
+        <div class="confirm-target">
+          <span id="confirmIcon" class="confirm-icon" aria-hidden="true">📁</span>
+          <span id="confirmName" class="confirm-name"></span>
+        </div>
+        <pre id="confirmPath" class="confirm-path"></pre>
+        <div class="modal-actions">
+          <button type="button" id="confirmNo" class="btn btn-secondary">No</button>
+          <button type="button" id="confirmYes" class="btn">Yes</button>
+        </div>
+      </div>
     </div>
   </div>
   <script src="/app.js"></script>
