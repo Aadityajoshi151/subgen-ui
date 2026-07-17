@@ -15,6 +15,7 @@ const cancelSettingsBtn = document.getElementById('cancelSettings');
 const inputHost = document.getElementById('serverHost');
 const inputPort = document.getElementById('serverPort');
 const selectLang = document.getElementById('defaultLanguage');
+const inputContainerName = document.getElementById('subgenContainerName');
 
 // Confirm modal elements
 const confirmModal = document.getElementById('confirmModal');
@@ -26,8 +27,8 @@ const confirmNoBtn = document.getElementById('confirmNo');
 const progressPanel = document.getElementById('progressPanel');
 const progressList = document.getElementById('progressList');
 const progressSummary = document.getElementById('progressSummary');
+const progressLogStatusEl = document.getElementById('progressLogStatus');
 const clearProgressBtn = document.getElementById('clearProgressBtn');
-const hideProgressBtn = document.getElementById('hideProgressBtn');
 
 // selected: Map<relPath, {type}>
 let selected = new Map();
@@ -280,7 +281,6 @@ confirmYesBtn?.addEventListener('click', async () => {
 // --- Progress panel ---
 
 function showProgressPanel() { progressPanel.classList.remove('hidden'); }
-function hideProgressPanel() { progressPanel.classList.add('hidden'); }
 
 function statusBadgeClass(status) {
   if (status === 'done') return 'badge-done';
@@ -302,7 +302,7 @@ function renderProgress(data) {
     name.textContent = job.relPath;
     const badge = document.createElement('span');
     badge.className = `badge ${statusBadgeClass(job.status)}`;
-    badge.textContent = job.status;
+    badge.textContent = job.status === 'processing' && job.percent != null ? `${job.percent}%` : job.status;
     li.appendChild(name);
     li.appendChild(badge);
     progressList.appendChild(li);
@@ -332,6 +332,12 @@ function renderProgress(data) {
   const total = jobs.length;
   const done = jobs.filter(j => j.status === 'done').length;
   progressSummary.textContent = total ? `${done}/${total} done` : '';
+
+  const logStatus = data.logStatus || { state: 'disabled' };
+  progressLogStatusEl.className = `progress-log-status log-${logStatus.state}`;
+  const labels = { connected: 'Live', disconnected: 'Reconnecting…', error: 'Log error', disabled: '' };
+  progressLogStatusEl.textContent = labels[logStatus.state] || '';
+  progressLogStatusEl.title = logStatus.detail || '';
 }
 
 async function pollProgress() {
@@ -361,11 +367,6 @@ clearProgressBtn?.addEventListener('click', async () => {
   await pollProgress();
 });
 
-hideProgressBtn?.addEventListener('click', () => {
-  hideProgressPanel();
-  stopProgressPolling();
-});
-
 // --- Settings modal logic ---
 function showSettingsModal() { settingsModal.classList.remove('hidden'); }
 function hideSettingsModal() { settingsModal.classList.add('hidden'); }
@@ -373,18 +374,20 @@ function hideSettingsModal() { settingsModal.classList.add('hidden'); }
 async function loadSettings() {
   try {
     const data = await fetchJSON('/api/settings');
-    settings = data.settings || { serverHost: '', serverPort: '', defaultLanguage: 'en' };
+    settings = data.settings || { serverHost: '', serverPort: '', defaultLanguage: 'en', subgenContainerName: '' };
     inputHost.value = settings.serverHost || '';
     inputPort.value = settings.serverPort || '';
     selectLang.value = settings.defaultLanguage || 'en';
+    inputContainerName.value = settings.subgenContainerName || '';
     if (!data.exists || !settings.serverHost || !settings.serverPort) {
       showSettingsModal();
     }
   } catch (e) {
-    settings = { serverHost: '', serverPort: '', defaultLanguage: 'en' };
+    settings = { serverHost: '', serverPort: '', defaultLanguage: 'en', subgenContainerName: '' };
     inputHost.value = '';
     inputPort.value = '';
     selectLang.value = 'en';
+    inputContainerName.value = '';
     showSettingsModal();
   }
 }
@@ -396,7 +399,8 @@ settingsForm.addEventListener('submit', async (e) => {
   const payload = {
     serverHost: inputHost.value.trim(),
     serverPort: inputPort.value.trim(),
-    defaultLanguage: selectLang.value
+    defaultLanguage: selectLang.value,
+    subgenContainerName: inputContainerName.value.trim()
   };
   try {
     setStatus('Saving settings…');

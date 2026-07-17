@@ -8,6 +8,10 @@ services:
     volumes:
       - ./content:/app/content:ro
       - ./config:/app/config:rw
+      # Read-only access to the Docker socket lets subgen-ui tail the subgen
+      # container's logs to show live % transcription progress. Optional:
+      # only needed if you set "Subgen Docker Container Name" in Settings.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - NODE_ENV=production
     restart: unless-stopped

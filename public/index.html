@@ -35,9 +35,9 @@
       <div class="progress-panel-header">
         <span>Subtitle Generation Progress</span>
         <div class="progress-panel-actions">
+          <span id="progressLogStatus" class="progress-log-status"></span>
           <span id="progressSummary" class="progress-summary"></span>
           <button id="clearProgressBtn" class="btn btn-sm" title="Clear progress list">Clear</button>
-          <button id="hideProgressBtn" class="btn btn-sm" title="Hide panel">Hide</button>
         </div>
       </div>
       <ul id="progressList" class="progress-list"></ul>
@@ -71,6 +71,11 @@
             <option value="hi">Hindi</option>
             <option value="ja">Japanese</option>
           </select>
+        </div>
+        <div class="field">
+          <label for="subgenContainerName">Subgen Docker Container Name (optional)</label>
+          <input id="subgenContainerName" name="subgenContainerName" type="text" placeholder="subgen" />
+          <span class="field-hint">Requires /var/run/docker.sock mounted into subgen-ui. Enables live % progress by tailing subgen's logs.</span>
         </div>
         <div class="modal-actions">
           <button type="button" id="cancelSettings" class="btn btn-secondary">Cancel</button>

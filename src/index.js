@@ -1,6 +1,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const subgenLogs = require('./subgenLogs');
 
 const app = express();
 const PORT = 8585;
@@ -101,7 +102,7 @@ function safeResolveContent(p) {
 }
 
 function defaultSettings() {
-  return { serverHost: '', serverPort: '', defaultLanguage: 'en' };
+  return { serverHost: '', serverPort: '', defaultLanguage: 'en', subgenContainerName: '' };
 }
 
 const LANGUAGE_MAP = {
@@ -154,6 +155,7 @@ function writeSettings(s) {
     if (!Number.isNaN(n) && n >= 1 && n <= 65535) clean.serverPort = String(n);
   }
   clean.defaultLanguage = normalizeLanguage(s.defaultLanguage);
+  if (typeof s.subgenContainerName === 'string') clean.subgenContainerName = s.subgenContainerName.trim();
   fs.writeFileSync(USER_SETTINGS_PATH, JSON.stringify(clean, null, 2));
   return clean;
 }
@@ -185,6 +187,7 @@ app.get('/api/settings', (req, res) => {
 app.post('/api/settings', (req, res) => {
   try {
     const saved = writeSettings(req.body || {});
+    subgenLogs.configure(saved.subgenContainerName, handleSubgenLogEvent, handleSubgenLogStatus);
     res.json({ ok: true, settings: saved });
   } catch {
     res.status(500).json({ error: 'Failed to save settings' });
@@ -206,12 +209,50 @@ app.post('/api/select', (req, res) => {
 });
 
 // --- Progress tracking -----------------------------------------------
-// Subgen has no polling/status API, but it can POST a completion event
-// (WEBHOOK_URL_COMPLETED) to us for every file it finishes. We keep an
-// in-memory record of the files the user queued and flip them to 'done'
-// as those webhook events arrive. This resets on server restart.
-const trackedJobs = new Map(); // relPath -> { relPath, type, groupPath, status, subtitle, language, queuedAt, completedAt }
+// Subgen has no polling/status API. Two sources feed progress here:
+// 1. WEBHOOK_URL_COMPLETED - subgen POSTs {file, subtitle, language} when a
+//    file finishes; reliable but binary (no percentage, fires only on success).
+// 2. Tailing the subgen container's own logs (via Docker socket, optional) -
+//    gives live "WORKER START" / "NN%" / "WORKER FINISH" lines per file.
+// This all resets on server restart.
+const trackedJobs = new Map(); // relPath -> { relPath, type, groupPath, status, percent, subtitle, language, queuedAt, completedAt }
 let submitCounter = 0;
+let subgenLogStatus = { state: 'disabled', detail: null, containerName: null };
+
+function findJobByDisplayName(name) {
+  for (const job of trackedJobs.values()) {
+    if (path.basename(job.relPath) === name) return job;
+  }
+  // ProgressHandler truncates long filenames to 37 chars + "..".
+  if (name.endsWith('..')) {
+    const prefix = name.slice(0, -2);
+    for (const job of trackedJobs.values()) {
+      if (path.basename(job.relPath).startsWith(prefix)) return job;
+    }
+  }
+  return null;
+}
+
+function handleSubgenLogEvent(event) {
+  const job = findJobByDisplayName(event.name);
+  if (!job) return;
+  if (event.type === 'start') {
+    job.status = 'processing';
+    if (job.percent == null) job.percent = 0;
+  } else if (event.type === 'progress') {
+    job.status = 'processing';
+    job.percent = event.percent;
+  } else if (event.type === 'finish' && job.status !== 'done') {
+    job.status = 'done';
+    job.percent = 100;
+    job.completedAt = job.completedAt || Date.now();
+  }
+}
+
+function handleSubgenLogStatus(status) {
+  subgenLogStatus = status;
+  console.log('[Subgen Logs]', status.state, status.detail || '', status.containerName || '');
+}
 
 app.post('/api/generate', (req, res) => {
   const items = Array.isArray(req.body && req.body.items) ? req.body.items : [];
@@ -232,13 +273,13 @@ app.post('/api/generate', (req, res) => {
       const files = collectVideoFiles(full, CONTENT_DIR);
       for (const f of files) {
         submitCounter += 1;
-        const job = { relPath: f, type: 'file', groupPath: rel, status: 'queued', subtitle: null, language: null, order: submitCounter, queuedAt: Date.now(), completedAt: null };
+        const job = { relPath: f, type: 'file', groupPath: rel, status: 'queued', percent: null, subtitle: null, language: null, order: submitCounter, queuedAt: Date.now(), completedAt: null };
         trackedJobs.set(f, job);
         registered.push(job);
       }
     } else {
       submitCounter += 1;
-      const job = { relPath: rel, type: 'file', groupPath: null, status: 'queued', subtitle: null, language: null, order: submitCounter, queuedAt: Date.now(), completedAt: null };
+      const job = { relPath: rel, type: 'file', groupPath: null, status: 'queued', percent: null, subtitle: null, language: null, order: submitCounter, queuedAt: Date.now(), completedAt: null };
       trackedJobs.set(rel, job);
       registered.push(job);
     }
@@ -255,6 +296,7 @@ app.post('/api/webhook/subgen-complete', (req, res) => {
   const job = trackedJobs.get(relPath);
   if (job) {
     job.status = 'done';
+    job.percent = 100;
     job.subtitle = body.subtitle || null;
     job.language = body.language || null;
     job.completedAt = Date.now();
@@ -267,13 +309,14 @@ app.post('/api/webhook/subgen-complete', (req, res) => {
 
 app.get('/api/progress', (req, res) => {
   const jobs = Array.from(trackedJobs.values()).sort((a, b) => a.order - b.order);
-  // Heuristic: with CONCURRENT_TRANSCRIPTIONS=1 jobs run in submission order,
-  // so the oldest still-queued job is the one most likely in progress right now.
-  const firstQueued = jobs.find(j => j.status === 'queued');
-  const view = jobs.map(j => ({
-    ...j,
-    status: j === firstQueued ? 'processing' : j.status
-  }));
+  let view = jobs;
+  if (!subgenLogs.isActive()) {
+    // No live log feed configured: fall back to a heuristic. With
+    // CONCURRENT_TRANSCRIPTIONS=1 jobs run in submission order, so the oldest
+    // still-queued job is the one most likely in progress right now.
+    const firstQueued = jobs.find(j => j.status === 'queued');
+    view = jobs.map(j => ({ ...j, status: j === firstQueued ? 'processing' : j.status }));
+  }
   const groups = {};
   for (const j of view) {
     if (!j.groupPath) continue;
@@ -281,7 +324,7 @@ app.get('/api/progress', (req, res) => {
     groups[j.groupPath].total += 1;
     if (j.status === 'done') groups[j.groupPath].done += 1;
   }
-  res.json({ jobs: view, groups });
+  res.json({ jobs: view, groups, logStatus: subgenLogStatus });
 });
 
 app.post('/api/progress/clear', (req, res) => {
@@ -295,4 +338,8 @@ app.get('/', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT}`);
+  const initialSettings = readSettings();
+  if (initialSettings && initialSettings.subgenContainerName) {
+    subgenLogs.configure(initialSettings.subgenContainerName, handleSubgenLogEvent, handleSubgenLogStatus);
+  }
 });
