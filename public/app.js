@@ -21,12 +21,18 @@ const confirmModal = document.getElementById('confirmModal');
 const confirmPathEl = document.getElementById('confirmPath');
 const confirmYesBtn = document.getElementById('confirmYes');
 const confirmNoBtn = document.getElementById('confirmNo');
-const confirmIconEl = document.getElementById('confirmIcon');
-const confirmNameEl = document.getElementById('confirmName');
 
-let selected = { path: null, type: null };
-let selectedEl = null;
+// Progress panel elements
+const progressPanel = document.getElementById('progressPanel');
+const progressList = document.getElementById('progressList');
+const progressSummary = document.getElementById('progressSummary');
+const clearProgressBtn = document.getElementById('clearProgressBtn');
+const hideProgressBtn = document.getElementById('hideProgressBtn');
+
+// selected: Map<relPath, {type}>
+let selected = new Map();
 let settings = null; // loaded user settings
+let progressTimer = null;
 
 function setStatus(msg) { statusEl.textContent = msg || ''; }
 
@@ -44,121 +50,164 @@ function postJSON(url, body) {
   });
 }
 
+// --- Tree rendering (lazy: only immediate children are fetched per folder) ---
+
+function updateSelectionSummary() {
+  const count = selected.size;
+  currentPathEl.textContent = count === 0 ? 'None' : `${count} item${count > 1 ? 's' : ''}`;
+  generateBtn.disabled = count === 0;
+}
+
+function toggleSelected(relPath, type, checked) {
+  if (checked) selected.set(relPath, { type });
+  else selected.delete(relPath);
+  updateSelectionSummary();
+}
+
+function buildItemRow(node) {
+  const item = document.createElement('div');
+  item.className = 'item';
+
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.className = 'select-box';
+  checkbox.checked = selected.has(node.path);
+  checkbox.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleSelected(node.path, node.type, checkbox.checked);
+  });
+  item.appendChild(checkbox);
+
+  if (node.type === 'folder') {
+    const chev = document.createElement('span'); chev.className = 'chev'; chev.textContent = '▸';
+    item.appendChild(chev);
+  } else {
+    const dot = document.createElement('span'); dot.className = 'dot';
+    item.appendChild(dot);
+  }
+
+  const name = document.createElement('span'); name.className = 'name'; name.textContent = node.name;
+  item.appendChild(name);
+
+  if (node.type === 'folder') {
+    const meta = document.createElement('span'); meta.className = 'meta badge'; meta.textContent = `${node.childCount || 0}`;
+    item.appendChild(meta);
+  }
+
+  return item;
+}
+
 function renderTreeNode(node) {
-  if (!node) return document.createTextNode('');
   if (node.type === 'file') {
     const li = document.createElement('li');
     li.className = 'file';
-    const item = document.createElement('div');
-    item.className = 'item';
-    const dot = document.createElement('span'); dot.className = 'dot';
-    const name = document.createElement('span'); name.className = 'name'; name.textContent = node.name;
-    item.appendChild(dot);
-    item.appendChild(name);
-    item.addEventListener('click', (e) => {
-      e.stopPropagation();
-      selectNode(item, node.path, 'file');
-    });
-    li.appendChild(item);
+    li.appendChild(buildItemRow(node));
     return li;
   }
+
   const li = document.createElement('li');
   li.className = 'folder collapsed';
-  const item = document.createElement('div'); item.className = 'item';
-  const chev = document.createElement('span'); chev.className = 'chev'; chev.textContent = '▸';
-  const name = document.createElement('span'); name.className = 'name'; name.textContent = node.name;
-  const meta = document.createElement('span'); meta.className = 'meta badge'; meta.textContent = `${(node.children||[]).length}`;
-  item.appendChild(chev); item.appendChild(name); item.appendChild(meta);
+  const item = buildItemRow(node);
   const children = document.createElement('ul'); children.className = 'children';
-  (node.children || []).forEach(c => children.appendChild(renderTreeNode(c)));
-  item.addEventListener('click', () => {
+  let loaded = false;
+
+  async function loadChildren() {
+    if (loaded) return;
+    loaded = true;
+    children.innerHTML = '<li class="loading">Loading…</li>';
+    try {
+      const data = await fetchJSON(`/api/tree?path=${encodeURIComponent(node.path)}`);
+      children.innerHTML = '';
+      (data.children || []).forEach(c => children.appendChild(renderTreeNode(c)));
+      if ((data.children || []).length === 0) {
+        children.innerHTML = '<li class="empty-folder">Empty</li>';
+      }
+    } catch (e) {
+      children.innerHTML = '<li class="empty-folder">Failed to load</li>';
+      loaded = false;
+    }
+  }
+
+  item.addEventListener('click', async () => {
     const isCollapsed = li.classList.contains('collapsed');
+    if (isCollapsed) await loadChildren();
     li.classList.toggle('collapsed', !isCollapsed);
     li.classList.toggle('expanded', isCollapsed);
-    selectNode(item, node.path, 'folder');
   });
+
   li.appendChild(item);
   li.appendChild(children);
+  li._loadChildren = loadChildren;
+  li._node = node;
   return li;
 }
 
-function renderTree(root) {
+function renderRoot(children) {
   treeEl.innerHTML = '';
-  if (!root || !root.tree) {
-    const div = document.createElement('div');
-    div.className = 'empty';
-    div.textContent = 'No content found. Create a \'content\' folder in the project root and add files.';
-    treeEl.appendChild(div);
-    return;
-  }
-  const ul = document.createElement('ul');
-  const nodes = (root.tree.children || []);
-  if (nodes.length === 0) {
+  if (!children || children.length === 0) {
     const div = document.createElement('div');
     div.className = 'empty';
     div.textContent = 'The content folder is empty.';
     treeEl.appendChild(div);
     return;
   }
-  nodes.forEach(n => ul.appendChild(renderTreeNode(n)));
+  const ul = document.createElement('ul');
+  children.forEach(n => ul.appendChild(renderTreeNode(n)));
   treeEl.appendChild(ul);
 }
 
-function setAllFolders(expand) {
-  const folders = treeEl.querySelectorAll('.folder');
-  folders.forEach(f => {
-    f.classList.toggle('collapsed', !expand);
-    f.classList.toggle('expanded', expand);
-  });
+async function setAllFolders(expand) {
+  const folders = Array.from(treeEl.querySelectorAll('.folder'));
+  if (expand) {
+    // Load one level at a time so we don't fire hundreds of requests at once.
+    for (const f of folders) {
+      if (f._loadChildren) await f._loadChildren();
+      f.classList.remove('collapsed');
+      f.classList.add('expanded');
+    }
+  } else {
+    folders.forEach(f => {
+      f.classList.add('collapsed');
+      f.classList.remove('expanded');
+    });
+  }
 }
 
 expandAllBtn?.addEventListener('click', () => setAllFolders(true));
 collapseAllBtn?.addEventListener('click', () => setAllFolders(false));
 
-
 async function loadTree() {
   try {
     setStatus('Loading…');
     const data = await fetchJSON('/api/tree');
-    renderTree(data);
-    // Clear any previous selection on refresh
-    selected = { path: null, type: null };
-    selectedEl = null;
-    currentPathEl.textContent = 'None';
-    generateBtn.disabled = true;
+    if (!data.exists) {
+      treeEl.innerHTML = '';
+      const div = document.createElement('div');
+      div.className = 'empty';
+      div.textContent = 'No content found. Create a \'content\' folder in the project root and add files.';
+      treeEl.appendChild(div);
+    } else {
+      renderRoot(data.children);
+    }
+    selected.clear();
+    updateSelectionSummary();
     setStatus('');
   } catch (e) {
     setStatus('Failed to load tree');
-    // Also clear selection if load fails so stale paths aren't used
-    selected = { path: null, type: null };
-    selectedEl = null;
-    currentPathEl.textContent = 'None';
-    generateBtn.disabled = true;
+    selected.clear();
+    updateSelectionSummary();
   }
-}
-
-function selectNode(el, relPath, type) {
-  if (selectedEl) selectedEl.classList.remove('selected');
-  selectedEl = el;
-  selected = { path: relPath, type };
-  el.classList.add('selected');
-  currentPathEl.textContent = relPath ? `/content/${relPath}` : 'Nothing selected';
-  generateBtn.disabled = !selected.path;
 }
 
 function clearSelection() {
-  if (selectedEl) {
-    selectedEl.classList.remove('selected');
-  }
-  selectedEl = null;
-  selected = { path: null, type: null };
-  currentPathEl.textContent = 'None';
-  generateBtn.disabled = true;
+  selected.clear();
+  updateSelectionSummary();
+  treeEl.querySelectorAll('.select-box').forEach(cb => { cb.checked = false; });
 }
 
 async function sendSelection() {
-  if (!selected.path) {
-    setStatus('Select a file or folder first');
+  if (selected.size === 0) {
+    setStatus('Select at least one file or folder first');
     return;
   }
   if (!settings || !settings.serverHost || !settings.serverPort) {
@@ -168,27 +217,29 @@ async function sendSelection() {
   }
   try {
     setStatus('Preparing…');
-    // Validate selection on server (still logs absolute path)
-    const selRes = await postJSON('/api/select', { path: selected.path, type: selected.type });
-    if (!selRes.ok) throw new Error(`Selection HTTP ${selRes.status}`);
-    const selData = await selRes.json();
-    // Build remote URL directly (may trigger CORS if different origin)
-    const relativeForContainer = `/content/${selected.path || ''}`.replace(/\/+$/,'');
-    const directoryParam = encodeURIComponent(relativeForContainer);
+    const items = Array.from(selected.entries()).map(([p, v]) => ({ path: p, type: v.type }));
+    const genRes = await postJSON('/api/generate', { items });
+    if (!genRes.ok) throw new Error(`Generate HTTP ${genRes.status}`);
+
+    // Subgen's /batch endpoint accepts multiple paths in one call, pipe-separated.
+    const directoryParam = items
+      .map(i => `/content/${i.path}`.replace(/\/+$/, ''))
+      .join('|');
+    const encodedDirectory = encodeURIComponent(directoryParam);
     const lang = encodeURIComponent(settings.defaultLanguage || 'en');
-    const remoteUrl = `http://${settings.serverHost}:${settings.serverPort}/batch?directory=${directoryParam}&forceLanguage=${lang}`;
+    const remoteUrl = `http://${settings.serverHost}:${settings.serverPort}/batch?directory=${encodedDirectory}&forceLanguage=${lang}`;
     console.log('[Generate Subs] Remote URL:', remoteUrl);
-    console.log('[Generate Subs] Params:', { directoryParam: relativeForContainer, lang });
-    // Fire-and-forget: do not await the response
     setStatus('Sending…');
     try {
-      fetch(remoteUrl, { method: 'POST', keepalive: true })
-        .catch(err => console.warn('[Generate Subs] Fire-and-forget error:', err));
+      const req = fetch(remoteUrl, { method: 'POST' });
+      window._lastGenRequest = req;
+      req.catch(err => console.warn('[Generate Subs] Request error:', err));
     } catch (ffErr) {
       console.warn('[Generate Subs] Dispatch error:', ffErr);
     }
-    alert('Generation request sent to Subgen server.');
     setStatus('Sent');
+    showProgressPanel();
+    startProgressPolling();
   } catch (e) {
     console.error('[Generate Subs] Error:', e);
     setStatus(e.message || 'Failed to generate');
@@ -198,22 +249,18 @@ async function sendSelection() {
 refreshBtn.addEventListener('click', loadTree);
 clearSelectionBtn?.addEventListener('click', clearSelection);
 
-function showConfirmModal(pathToSend) {
-  confirmPathEl.textContent = pathToSend || '';
-  const isFolder = selected?.type === 'folder';
-  confirmIconEl.textContent = isFolder ? '📁' : '📄';
-  const name = (selected?.path || '').split('/').filter(Boolean).pop() || (isFolder ? 'Folder' : 'File');
-  confirmNameEl.textContent = name;
+function showConfirmModal() {
+  const items = Array.from(selected.keys());
+  confirmPathEl.textContent = items.map(p => `/content/${p}`).join('\n');
   confirmModal.classList.remove('hidden');
 }
 function hideConfirmModal() {
   confirmModal.classList.add('hidden');
 }
 
-generateBtn.addEventListener('click', (e) => {
-  if (!selected.path) return; // safety; button should be disabled anyway
-  const relativeForContainer = `/content/${selected.path || ''}`.replace(/\/+$/,'');
-  showConfirmModal(relativeForContainer);
+generateBtn.addEventListener('click', () => {
+  if (selected.size === 0) return; // safety; button should be disabled anyway
+  showConfirmModal();
 });
 
 confirmNoBtn?.addEventListener('click', hideConfirmModal);
@@ -222,7 +269,96 @@ confirmYesBtn?.addEventListener('click', async () => {
   await sendSelection();
 });
 
-// Settings modal logic
+// --- Progress panel ---
+
+function showProgressPanel() { progressPanel.classList.remove('hidden'); }
+function hideProgressPanel() { progressPanel.classList.add('hidden'); }
+
+function statusBadgeClass(status) {
+  if (status === 'done') return 'badge-done';
+  if (status === 'processing') return 'badge-processing';
+  return 'badge-queued';
+}
+
+function renderProgress(data) {
+  const jobs = data.jobs || [];
+  progressList.innerHTML = '';
+  if (jobs.length === 0) {
+    progressList.innerHTML = '<li class="empty-folder">No jobs tracked yet.</li>';
+  }
+  jobs.forEach(job => {
+    const li = document.createElement('li');
+    li.className = 'progress-item';
+    const name = document.createElement('span');
+    name.className = 'progress-name';
+    name.textContent = job.relPath;
+    const badge = document.createElement('span');
+    badge.className = `badge ${statusBadgeClass(job.status)}`;
+    badge.textContent = job.status;
+    li.appendChild(name);
+    li.appendChild(badge);
+    progressList.appendChild(li);
+  });
+
+  const groupEntries = Object.entries(data.groups || {});
+  if (groupEntries.length > 0) {
+    const header = document.createElement('li');
+    header.className = 'progress-group-header';
+    header.textContent = 'Folders';
+    progressList.insertBefore(header, progressList.firstChild);
+    groupEntries.reverse().forEach(([groupPath, g]) => {
+      const li = document.createElement('li');
+      li.className = 'progress-item progress-group';
+      const name = document.createElement('span');
+      name.className = 'progress-name';
+      name.textContent = `/content/${groupPath}`;
+      const badge = document.createElement('span');
+      badge.className = 'badge badge-queued';
+      badge.textContent = `${g.done}/${g.total}`;
+      li.appendChild(name);
+      li.appendChild(badge);
+      progressList.insertBefore(li, progressList.firstChild.nextSibling);
+    });
+  }
+
+  const total = jobs.length;
+  const done = jobs.filter(j => j.status === 'done').length;
+  progressSummary.textContent = total ? `${done}/${total} done` : '';
+}
+
+async function pollProgress() {
+  try {
+    const data = await fetchJSON('/api/progress');
+    renderProgress(data);
+  } catch (e) {
+    // ignore transient failures
+  }
+}
+
+function startProgressPolling() {
+  if (progressTimer) return;
+  pollProgress();
+  progressTimer = setInterval(pollProgress, 4000);
+}
+
+function stopProgressPolling() {
+  if (progressTimer) {
+    clearInterval(progressTimer);
+    progressTimer = null;
+  }
+}
+
+clearProgressBtn?.addEventListener('click', async () => {
+  await postJSON('/api/progress/clear', {});
+  await pollProgress();
+});
+
+hideProgressBtn?.addEventListener('click', () => {
+  hideProgressPanel();
+  stopProgressPolling();
+});
+
+// --- Settings modal logic ---
 function showSettingsModal() { settingsModal.classList.remove('hidden'); }
 function hideSettingsModal() { settingsModal.classList.add('hidden'); }
 
@@ -260,7 +396,6 @@ settingsForm.addEventListener('submit', async (e) => {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     hideSettingsModal();
     setStatus('Settings saved');
-    // Reload settings into memory
     settings = (await res.json()).settings;
   } catch (err) {
     setStatus('Failed to save settings');
@@ -270,3 +405,15 @@ settingsForm.addEventListener('submit', async (e) => {
 // Initial load
 loadTree();
 loadSettings();
+
+// Resume polling on load in case a batch is still running from before a refresh.
+(async () => {
+  try {
+    const data = await fetchJSON('/api/progress');
+    if ((data.jobs || []).length > 0) {
+      showProgressPanel();
+      renderProgress(data);
+      startProgressPolling();
+    }
+  } catch {}
+})();

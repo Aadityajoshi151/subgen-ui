@@ -31,6 +31,17 @@
       </div>
     </div>
     <div id="tree" class="tree tree-central"></div>
+    <div id="progressPanel" class="progress-panel hidden">
+      <div class="progress-panel-header">
+        <span>Subtitle Generation Progress</span>
+        <div class="progress-panel-actions">
+          <span id="progressSummary" class="progress-summary"></span>
+          <button id="clearProgressBtn" class="btn btn-sm" title="Clear progress list">Clear</button>
+          <button id="hideProgressBtn" class="btn btn-sm" title="Hide panel">Hide</button>
+        </div>
+      </div>
+      <ul id="progressList" class="progress-list"></ul>
+    </div>
   </main>
   <footer class="app-footer">
     <span>Subgen UI</span>
@@ -75,11 +86,7 @@
         <h2 id="confirmTitle">Confirm Generation</h2>
       </div>
       <div class="modal-body">
-        <p>Send this path to the server?</p>
-        <div class="confirm-target">
-          <span id="confirmIcon" class="confirm-icon" aria-hidden="true">📁</span>
-          <span id="confirmName" class="confirm-name"></span>
-        </div>
+        <p id="confirmIntro">Send these items to the server?</p>
         <pre id="confirmPath" class="confirm-path"></pre>
         <div class="modal-actions">
           <button type="button" id="confirmNo" class="btn btn-secondary">No</button>
