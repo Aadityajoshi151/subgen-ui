@@ -87,16 +87,19 @@ function buildItemRow(node) {
     item.appendChild(dot);
   }
 
+  const titleWrap = document.createElement('span'); titleWrap.className = 'title-wrap';
   const name = document.createElement('span'); name.className = 'name'; name.textContent = node.name;
-  item.appendChild(name);
+  titleWrap.appendChild(name);
 
   if (node.type === 'file' && node.hasSubtitle) {
     const sub = document.createElement('span');
     sub.className = 'has-subtitle';
     sub.textContent = '💬';
     sub.title = 'Subtitle already generated';
-    item.appendChild(sub);
+    titleWrap.appendChild(sub);
   }
+
+  item.appendChild(titleWrap);
 
   if (node.type === 'folder') {
     const meta = document.createElement('span'); meta.className = 'meta badge'; meta.textContent = `${node.childCount || 0}`;

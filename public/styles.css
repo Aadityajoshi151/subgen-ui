@@ -23,7 +23,8 @@ body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,C
 .tree .item:hover{background:rgba(34,211,238,.08)}
 .tree .item.selected{outline:1px solid #0ea5e9;background:rgba(14,165,233,.12)}
 .tree .chev{width:12px;transition:transform .15s ease;opacity:.8}
-.tree .name{flex:1;white-space:normal;word-break:break-word}
+.title-wrap{flex:1;display:flex;align-items:center;gap:6px;min-width:0}
+.tree .name{white-space:normal;word-break:break-word}
 .tree .meta{font-size:11px;color:var(--muted)}
 .tree .folder>.item{color:#e2e8f0}
 .tree .folder.collapsed>.children{display:none}

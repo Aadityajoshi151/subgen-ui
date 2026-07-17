@@ -213,39 +213,38 @@ app.post('/api/select', (req, res) => {
 // 1. WEBHOOK_URL_COMPLETED - subgen POSTs {file, subtitle, language} when a
 //    file finishes; reliable but binary (no percentage, fires only on success).
 // 2. Tailing the subgen container's own logs (via Docker socket, optional) -
-//    gives live "WORKER START" / "NN%" / "WORKER FINISH" lines per file.
+//    subgen's progress lines don't name the file being processed, so with
+//    CONCURRENT_TRANSCRIPTIONS=1 the oldest still-open tracked job is
+//    assumed to be the one currently running.
 // This all resets on server restart.
 const trackedJobs = new Map(); // relPath -> { relPath, type, groupPath, status, percent, subtitle, language, queuedAt, completedAt }
 let submitCounter = 0;
 let subgenLogStatus = { state: 'disabled', detail: null, containerName: null };
-
-function findJobByDisplayName(name) {
-  for (const job of trackedJobs.values()) {
-    if (path.basename(job.relPath) === name) return job;
-  }
-  // ProgressHandler truncates long filenames to 37 chars + "..".
-  if (name.endsWith('..')) {
-    const prefix = name.slice(0, -2);
-    for (const job of trackedJobs.values()) {
-      if (path.basename(job.relPath).startsWith(prefix)) return job;
-    }
-  }
-  return null;
-}
+let activeJobPath = null; // relPath of the job assumed to be running right now, per the log stream
 
 function handleSubgenLogEvent(event) {
-  const job = findJobByDisplayName(event.name);
-  if (!job) return;
-  if (event.type === 'start') {
-    job.status = 'processing';
-    if (job.percent == null) job.percent = 0;
-  } else if (event.type === 'progress') {
-    job.status = 'processing';
-    job.percent = event.percent;
-  } else if (event.type === 'finish' && job.status !== 'done') {
-    job.status = 'done';
-    job.percent = 100;
-    job.completedAt = job.completedAt || Date.now();
+  if (event.type === 'file-start') {
+    if (activeJobPath) {
+      const prev = trackedJobs.get(activeJobPath);
+      if (prev && prev.status !== 'done') {
+        prev.status = 'done';
+        prev.percent = 100;
+        prev.completedAt = prev.completedAt || Date.now();
+      }
+    }
+    const jobsInOrder = Array.from(trackedJobs.values()).sort((a, b) => a.order - b.order);
+    const next = jobsInOrder.find(j => j.status !== 'done');
+    activeJobPath = next ? next.relPath : null;
+    if (next) {
+      next.status = 'processing';
+      next.percent = 0;
+    }
+  } else if (event.type === 'progress' && activeJobPath) {
+    const job = trackedJobs.get(activeJobPath);
+    if (job) {
+      job.status = 'processing';
+      job.percent = event.percent;
+    }
   }
 }
 

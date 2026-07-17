@@ -1,21 +1,33 @@
 const Docker = require('dockerode');
 
-// Subgen logs everything to stderr with lines like:
-//   WORKER START :[TRANSCRIBE] ep1.mkv                                  | Jobs: 1 processing, 2 queued
-//   [ ep1.mkv                                 ]  42% |   123/295  s [ 02:03< 02:50,  1.00s/s] | Jobs: ...
-//   WORKER FINISH: [TRANSCRIBE] ep1.mkv                                  in 2m 30s | Remaining: 1 queued
-const PROGRESS_RE = /\[\s*(.*?)\s*\]\s*(\d+)%\s*\|\s*(\d+)\/(\d+)\s*s/;
-const WORKER_START_RE = /WORKER START\s*:\[(\w+)\s*\]\s*(.*?)\s*\|\s*Jobs:/;
-const WORKER_FINISH_RE = /WORKER FINISH:\s*\[(\w+)\s*\]\s*(.*?)\s+in\s+(\d+)m\s+(\d+)s/;
+// Subgen's real log output (confirmed against a live container) looks like:
+//   INFO: Processing audio with duration 20:54.571
+//   Detected Language: english
+//   Transcribe:  42%|████▏     | 521.56/1254.57 [03:03<05:00,  2.44sec/s]
+// tqdm writes the "Transcribe: NN%|" bar using \r (not \n) to overwrite
+// itself, and Python's own logging calls get interleaved on the same raw
+// line as a result, so lines are NOT parsed one at a time — instead each
+// chunk of stream output is scanned directly:
+//   - "Processing audio with duration" marks a NEW file starting (subgen
+//     has no per-file name in these lines; with CONCURRENT_TRANSCRIPTIONS=1
+//     the oldest still-open tracked job is assumed to be the one running).
+//   - "Transcribe: NN%|" gives the live percentage for whichever job is
+//     currently marked "processing".
+const FILE_START_RE = /Processing audio with duration/g;
+const PROGRESS_RE = /Transcribe:\s*(\d+)%\|/g;
 
-function parseLine(line) {
-  let m = line.match(WORKER_START_RE);
-  if (m) return { type: 'start', taskType: m[1].toLowerCase(), name: m[2].trim() };
-  m = line.match(WORKER_FINISH_RE);
-  if (m) return { type: 'finish', taskType: m[1].toLowerCase(), name: m[2].trim() };
-  m = line.match(PROGRESS_RE);
-  if (m) return { type: 'progress', name: m[1].trim(), percent: Number(m[2]) };
-  return null;
+function parseChunk(text) {
+  const events = [];
+  const startMatches = text.match(FILE_START_RE);
+  if (startMatches) {
+    for (let i = 0; i < startMatches.length; i++) events.push({ type: 'file-start' });
+  }
+  const progressMatches = [...text.matchAll(PROGRESS_RE)];
+  if (progressMatches.length > 0) {
+    const last = progressMatches[progressMatches.length - 1];
+    events.push({ type: 'progress', percent: Number(last[1]) });
+  }
+  return events;
 }
 
 let docker = null;
@@ -70,15 +82,9 @@ function attach(containerName) {
     currentStream = stream;
     reportStatus('connected');
 
-    let buffer = '';
     const handleChunk = (chunk) => {
-      buffer += chunk.toString('utf8');
-      const lines = buffer.split('\n');
-      buffer = lines.pop(); // keep the trailing partial line
-      for (const raw of lines) {
-        const event = parseLine(raw);
-        if (event && onEventCallback) onEventCallback(event);
-      }
+      const events = parseChunk(chunk.toString('utf8'));
+      if (onEventCallback) events.forEach(onEventCallback);
     };
 
     // Docker multiplexes stdout/stderr frames unless the container was
@@ -103,7 +109,7 @@ function attach(containerName) {
 }
 
 // Switches log tailing to a new container name (or stops it if name is empty).
-// onEvent receives { type: 'start'|'progress'|'finish', name, taskType?, percent? }.
+// onEvent receives { type: 'file-start' } or { type: 'progress', percent }.
 // onStatus receives { state: 'connected'|'disconnected'|'error', detail?, containerName }.
 function configure(containerName, onEvent, onStatus) {
   onEventCallback = onEvent;
