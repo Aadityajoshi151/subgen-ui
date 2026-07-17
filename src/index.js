@@ -13,12 +13,30 @@ const USER_SETTINGS_PATH = path.join(CONFIG_DIR, 'user-settings.json');
 const VIDEO_EXTENSIONS = new Set([
   '.mkv', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg', '.ts'
 ]);
+const SUBTITLE_EXTENSIONS = new Set(['.srt', '.vtt', '.ass', '.ssa', '.sub']);
 
 app.use(express.json());
 app.use(express.static(path.join(process.cwd(), 'public')));
 
+// A subtitle "belongs" to a video if its name (minus subtitle extension,
+// minus an optional trailing language code like ".en") starts with the
+// video's basename, e.g. "ep1.mkv" <- "ep1.srt" / "ep1.en.srt".
+function subtitleMatchesVideo(subtitleBase, videoBase) {
+  return subtitleBase === videoBase || subtitleBase.startsWith(videoBase + '.');
+}
+
+function nonHiddenNames(dirPath) {
+  try {
+    return fs.readdirSync(dirPath).filter(n => !n.startsWith('.'));
+  } catch {
+    return [];
+  }
+}
+
 // Lists only the immediate children of dirPath (one level deep) so that
 // browsing a large library doesn't require walking the entire tree up front.
+// Subtitle files are hidden from the listing; instead the video they belong
+// to is flagged with hasSubtitle.
 function listChildren(dirPath, basePath) {
   let entries;
   try {
@@ -26,21 +44,25 @@ function listChildren(dirPath, basePath) {
   } catch {
     return [];
   }
-  return entries
-    .filter(e => !e.name.startsWith('.'))
+  const visible = entries.filter(e => !e.name.startsWith('.'));
+  const subtitleBases = visible
+    .filter(e => !e.isDirectory() && SUBTITLE_EXTENSIONS.has(path.extname(e.name).toLowerCase()))
+    .map(e => path.basename(e.name, path.extname(e.name)));
+
+  return visible
+    .filter(e => e.isDirectory() || !SUBTITLE_EXTENSIONS.has(path.extname(e.name).toLowerCase()))
     .map(ent => {
       const fullPath = path.join(dirPath, ent.name);
       const isDir = ent.isDirectory();
       const relPath = path.relative(basePath, fullPath).split(path.sep).join('/');
       const node = { name: ent.name, path: relPath, type: isDir ? 'folder' : 'file' };
       if (isDir) {
-        let childCount = 0;
-        try {
-          childCount = fs.readdirSync(fullPath).filter(n => !n.startsWith('.')).length;
-        } catch {
-          childCount = 0;
-        }
-        node.childCount = childCount;
+        const childNames = nonHiddenNames(fullPath);
+        const childSubtitleExts = childNames.filter(n => SUBTITLE_EXTENSIONS.has(path.extname(n).toLowerCase()));
+        node.childCount = childNames.length - childSubtitleExts.length;
+      } else {
+        const videoBase = path.basename(ent.name, path.extname(ent.name));
+        node.hasSubtitle = subtitleBases.some(sb => subtitleMatchesVideo(sb, videoBase));
       }
       return node;
     })

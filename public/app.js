@@ -89,6 +89,14 @@ function buildItemRow(node) {
   const name = document.createElement('span'); name.className = 'name'; name.textContent = node.name;
   item.appendChild(name);
 
+  if (node.type === 'file' && node.hasSubtitle) {
+    const sub = document.createElement('span');
+    sub.className = 'has-subtitle';
+    sub.textContent = '💬';
+    sub.title = 'Subtitle already generated';
+    item.appendChild(sub);
+  }
+
   if (node.type === 'folder') {
     const meta = document.createElement('span'); meta.className = 'meta badge'; meta.textContent = `${node.childCount || 0}`;
     item.appendChild(meta);
