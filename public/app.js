@@ -97,6 +97,14 @@ function buildItemRow(node) {
     sub.textContent = '💬';
     sub.title = 'Subtitle already generated';
     titleWrap.appendChild(sub);
+
+    if (node.subtitleLanguage) {
+      const lang = document.createElement('span');
+      const isEnglish = node.subtitleLanguage === 'en';
+      lang.className = `subtitle-lang${isEnglish ? ' lang-en' : ''}`;
+      lang.textContent = node.subtitleLanguage.toUpperCase();
+      titleWrap.appendChild(lang);
+    }
   }
 
   item.appendChild(titleWrap);

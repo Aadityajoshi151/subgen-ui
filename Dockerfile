@@ -2,6 +2,9 @@
 FROM node:20-alpine AS base
 WORKDIR /app
 
+# ffprobe (from ffmpeg) is used to detect embedded subtitle tracks in videos
+RUN apk add --no-cache ffmpeg
+
 # Install deps separately for caching
 COPY package*.json ./
 RUN npm install --only=production

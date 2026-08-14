@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const subgenLogs = require('./subgenLogs');
+const { probeMany, normalizeStreamLanguage } = require('./subtitleProbe');
 
 const app = express();
 const PORT = 8585;
@@ -26,6 +27,15 @@ function subtitleMatchesVideo(subtitleBase, videoBase) {
   return subtitleBase === videoBase || subtitleBase.startsWith(videoBase + '.');
 }
 
+// Pulls a language code out of the bit after the video's basename, e.g.
+// "ep1.en" (videoBase "ep1") -> "en". Returns null if there's no code
+// (plain "ep1.srt") or it isn't one of the languages this app recognizes.
+function extractSubtitleLanguage(subtitleBase, videoBase) {
+  if (subtitleBase === videoBase) return null;
+  const remainder = subtitleBase.slice(videoBase.length + 1);
+  return normalizeStreamLanguage(remainder);
+}
+
 function nonHiddenNames(dirPath) {
   try {
     return fs.readdirSync(dirPath).filter(n => !n.startsWith('.'));
@@ -37,8 +47,10 @@ function nonHiddenNames(dirPath) {
 // Lists only the immediate children of dirPath (one level deep) so that
 // browsing a large library doesn't require walking the entire tree up front.
 // Subtitle files are hidden from the listing; instead the video they belong
-// to is flagged with hasSubtitle.
-function listChildren(dirPath, basePath) {
+// to is flagged with hasSubtitle (+ subtitleLanguage), whether that's from a
+// sibling subtitle file or (checked via ffprobe, only when no sibling file
+// matched) a subtitle track embedded in the video itself.
+async function listChildren(dirPath, basePath) {
   let entries;
   try {
     entries = fs.readdirSync(dirPath, { withFileTypes: true });
@@ -46,9 +58,40 @@ function listChildren(dirPath, basePath) {
     return [];
   }
   const visible = entries.filter(e => !e.name.startsWith('.'));
-  const subtitleBases = visible
+  const subtitleFiles = visible
     .filter(e => !e.isDirectory() && SUBTITLE_EXTENSIONS.has(path.extname(e.name).toLowerCase()))
     .map(e => path.basename(e.name, path.extname(e.name)));
+  const videoEntries = visible.filter(e => !e.isDirectory() && VIDEO_EXTENSIONS.has(path.extname(e.name).toLowerCase()));
+
+  // External subtitles are just a filename check (cheap); only fall back to
+  // probing the video file itself (an ffprobe spawn) when nothing matched.
+  const externalByName = new Map();
+  const needsProbe = [];
+  for (const ent of videoEntries) {
+    const videoBase = path.basename(ent.name, path.extname(ent.name));
+    const matchingBases = subtitleFiles.filter(sb => subtitleMatchesVideo(sb, videoBase));
+    if (matchingBases.length > 0) {
+      const languages = matchingBases.map(sb => extractSubtitleLanguage(sb, videoBase));
+      const language = languages.includes('en') ? 'en' : (languages.find(Boolean) || null);
+      externalByName.set(ent.name, { hasSubtitle: true, subtitleLanguage: language });
+    } else {
+      needsProbe.push(ent.name);
+    }
+  }
+
+  const probeResultByName = new Map();
+  if (needsProbe.length > 0) {
+    const probeInputs = needsProbe
+      .map(name => {
+        const fullPath = path.join(dirPath, name);
+        let stat;
+        try { stat = fs.statSync(fullPath); } catch { stat = null; }
+        return { name, absPath: fullPath, stat };
+      })
+      .filter(p => p.stat);
+    const results = await probeMany(probeInputs.map(p => ({ absPath: p.absPath, stat: p.stat })));
+    probeInputs.forEach((p, i) => probeResultByName.set(p.name, results[i]));
+  }
 
   return visible
     .filter(e => e.isDirectory() || !SUBTITLE_EXTENSIONS.has(path.extname(e.name).toLowerCase()))
@@ -61,9 +104,14 @@ function listChildren(dirPath, basePath) {
         const childNames = nonHiddenNames(fullPath);
         const childSubtitleExts = childNames.filter(n => SUBTITLE_EXTENSIONS.has(path.extname(n).toLowerCase()));
         node.childCount = childNames.length - childSubtitleExts.length;
-      } else {
-        const videoBase = path.basename(ent.name, path.extname(ent.name));
-        node.hasSubtitle = subtitleBases.some(sb => subtitleMatchesVideo(sb, videoBase));
+      } else if (externalByName.has(ent.name)) {
+        const info = externalByName.get(ent.name);
+        node.hasSubtitle = info.hasSubtitle;
+        node.subtitleLanguage = info.subtitleLanguage;
+      } else if (probeResultByName.has(ent.name)) {
+        const probed = probeResultByName.get(ent.name);
+        node.hasSubtitle = probed.hasEmbedded;
+        node.subtitleLanguage = probed.language;
       }
       return node;
     })
@@ -160,7 +208,7 @@ function writeSettings(s) {
   return clean;
 }
 
-app.get('/api/tree', (req, res) => {
+app.get('/api/tree', async (req, res) => {
   if (!fs.existsSync(CONTENT_DIR)) {
     return res.json({ exists: false, message: 'content directory not found', tree: null });
   }
@@ -174,7 +222,7 @@ app.get('/api/tree', (req, res) => {
     return res.status(404).json({ error: 'Not found' });
   }
   if (!stat.isDirectory()) return res.status(400).json({ error: 'Not a folder' });
-  const children = listChildren(target, CONTENT_DIR);
+  const children = await listChildren(target, CONTENT_DIR);
   res.json({ exists: true, path: rel, children });
 });
 
