@@ -480,6 +480,12 @@ settingsForm.addEventListener('submit', async (e) => {
 loadTree();
 loadSettings();
 
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(err => console.warn('[PWA] Service worker registration failed:', err));
+  });
+}
+
 // Resume polling on load in case a batch is still running from before a refresh.
 (async () => {
   try {
