@@ -28,6 +28,7 @@ const progressPanel = document.getElementById('progressPanel');
 const progressList = document.getElementById('progressList');
 const progressSummary = document.getElementById('progressSummary');
 const progressLogStatusEl = document.getElementById('progressLogStatus');
+const progressBanner = document.getElementById('progressBanner');
 const clearProgressBtn = document.getElementById('clearProgressBtn');
 
 // selected: Map<relPath, {type}>
@@ -346,9 +347,41 @@ function renderProgress(data) {
 
   const logStatus = data.logStatus || { state: 'disabled' };
   progressLogStatusEl.className = `progress-log-status log-${logStatus.state}`;
-  const labels = { connected: 'Live', disconnected: 'Reconnecting…', error: 'Log error', disabled: '' };
+  const labels = { connected: 'Live', disconnected: 'Reconnecting…', error: 'Log error', disabled: 'Not configured' };
   progressLogStatusEl.textContent = labels[logStatus.state] || '';
   progressLogStatusEl.title = logStatus.detail || '';
+
+  renderProgressBanner(logStatus, data.webhookConfigured, total);
+}
+
+function renderProgressBanner(logStatus, webhookConfigured, totalJobs) {
+  const webhookUrl = `${window.location.origin}/api/webhook/subgen-complete`;
+  const lines = [];
+
+  if (logStatus.state === 'disabled') {
+    lines.push('Live % progress is off — set "Subgen Docker Container Name" in Settings to tail its logs.');
+  } else if (logStatus.state === 'error') {
+    lines.push(`Can't read subgen's logs (${logStatus.detail || 'unknown error'}). Check the container name and that /var/run/docker.sock is mounted into subgen-ui.`);
+  } else if (logStatus.state === 'disconnected') {
+    lines.push('Lost connection to subgen’s logs, reconnecting…');
+  }
+
+  if (totalJobs > 0 && !webhookConfigured) {
+    lines.push(`No completion signal received yet — without it, finished videos never flip to "done". Add WEBHOOK_URL_COMPLETED=${webhookUrl} to your subgen container's environment.`);
+  }
+
+  if (lines.length === 0) {
+    progressBanner.classList.add('hidden');
+    progressBanner.innerHTML = '';
+    return;
+  }
+  progressBanner.classList.remove('hidden');
+  progressBanner.innerHTML = '';
+  lines.forEach(line => {
+    const p = document.createElement('p');
+    p.textContent = line;
+    progressBanner.appendChild(p);
+  });
 }
 
 async function pollProgress() {

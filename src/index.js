@@ -339,7 +339,10 @@ app.post('/api/generate', (req, res) => {
   res.json({ ok: true, registered: registered.length });
 });
 
+let webhookReceivedCount = 0;
+
 app.post('/api/webhook/subgen-complete', (req, res) => {
+  webhookReceivedCount += 1;
   const body = req.body || {};
   const filePath = body.file || '';
   // Subgen reports the container path it was given, e.g. "/content/Show/ep1.mkv".
@@ -359,23 +362,24 @@ app.post('/api/webhook/subgen-complete', (req, res) => {
 });
 
 app.get('/api/progress', (req, res) => {
+  // No heuristic guessing here: a job's status only ever reflects what we
+  // actually know (log-tailing events for 'processing'/percent, the
+  // completion webhook for 'done'). Faking a status when neither source is
+  // configured just hides the fact that nothing is actually being tracked.
   const jobs = Array.from(trackedJobs.values()).sort((a, b) => a.order - b.order);
-  let view = jobs;
-  if (!subgenLogs.isActive()) {
-    // No live log feed configured: fall back to a heuristic. With
-    // CONCURRENT_TRANSCRIPTIONS=1 jobs run in submission order, so the oldest
-    // still-queued job is the one most likely in progress right now.
-    const firstQueued = jobs.find(j => j.status === 'queued');
-    view = jobs.map(j => ({ ...j, status: j === firstQueued ? 'processing' : j.status }));
-  }
   const groups = {};
-  for (const j of view) {
+  for (const j of jobs) {
     if (!j.groupPath) continue;
     if (!groups[j.groupPath]) groups[j.groupPath] = { total: 0, done: 0 };
     groups[j.groupPath].total += 1;
     if (j.status === 'done') groups[j.groupPath].done += 1;
   }
-  res.json({ jobs: view, groups, logStatus: subgenLogStatus });
+  res.json({
+    jobs,
+    groups,
+    logStatus: subgenLogStatus,
+    webhookConfigured: webhookReceivedCount > 0
+  });
 });
 
 app.post('/api/progress/clear', (req, res) => {
