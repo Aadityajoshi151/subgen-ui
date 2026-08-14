@@ -28,12 +28,16 @@ function subtitleMatchesVideo(subtitleBase, videoBase) {
 }
 
 // Pulls a language code out of the bit after the video's basename, e.g.
-// "ep1.en" (videoBase "ep1") -> "en". Returns null if there's no code
-// (plain "ep1.srt") or it isn't one of the languages this app recognizes.
+// "ep1.en" (videoBase "ep1") -> "en", or "ep1.subgen.small.eng" -> "en".
+// Checks every dot-separated tag (not just the whole remainder, since tools
+// like subgen can add extra tags before the language code) and prefers "en"
+// if multiple recognized codes are present. Returns null if none match.
 function extractSubtitleLanguage(subtitleBase, videoBase) {
   if (subtitleBase === videoBase) return null;
   const remainder = subtitleBase.slice(videoBase.length + 1);
-  return normalizeStreamLanguage(remainder);
+  const codes = remainder.split('.').map(normalizeStreamLanguage).filter(Boolean);
+  if (codes.length === 0) return null;
+  return codes.includes('en') ? 'en' : codes[0];
 }
 
 function nonHiddenNames(dirPath) {
