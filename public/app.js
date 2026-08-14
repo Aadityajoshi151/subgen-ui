@@ -35,6 +35,10 @@ const clearProgressBtn = document.getElementById('clearProgressBtn');
 let selected = new Map();
 let settings = null; // loaded user settings
 let progressTimer = null;
+// relPath -> { titleWrap, node } for currently-rendered file rows, so a
+// completed generation job can flip a row's icon live without re-fetching
+// (and re-probing) its whole parent folder.
+const treeRowRefs = new Map();
 
 function setStatus(msg) { statusEl.textContent = msg || ''; }
 
@@ -66,6 +70,35 @@ function toggleSelected(relPath, type, checked) {
   updateSelectionSummary();
 }
 
+function renderSubtitleBadge(titleWrap, language) {
+  const sub = document.createElement('span');
+  sub.className = 'has-subtitle';
+  sub.textContent = '💬';
+  sub.title = 'Subtitle already generated';
+  titleWrap.appendChild(sub);
+
+  if (language) {
+    const lang = document.createElement('span');
+    const isEnglish = language === 'en';
+    lang.className = `subtitle-lang${isEnglish ? ' lang-en' : ''}`;
+    lang.textContent = language.toUpperCase();
+    titleWrap.appendChild(lang);
+  }
+}
+
+// Flips a file's tree row from the "no subtitle" ❌ to the 💬 + language
+// badge once its generation job completes, without waiting for the user to
+// collapse/re-expand (and re-fetch/re-probe) its parent folder.
+function applySubtitleDone(relPath, language) {
+  const ref = treeRowRefs.get(relPath);
+  if (!ref || ref.node.hasSubtitle === true) return;
+  ref.node.hasSubtitle = true;
+  ref.node.subtitleLanguage = language || ref.node.subtitleLanguage || null;
+  const noSub = ref.titleWrap.querySelector('.no-subtitle');
+  if (noSub) noSub.remove();
+  renderSubtitleBadge(ref.titleWrap, ref.node.subtitleLanguage);
+}
+
 function buildItemRow(node) {
   const item = document.createElement('div');
   item.className = 'item';
@@ -93,25 +126,17 @@ function buildItemRow(node) {
   titleWrap.appendChild(name);
 
   if (node.type === 'file' && node.hasSubtitle === true) {
-    const sub = document.createElement('span');
-    sub.className = 'has-subtitle';
-    sub.textContent = '💬';
-    sub.title = 'Subtitle already generated';
-    titleWrap.appendChild(sub);
-
-    if (node.subtitleLanguage) {
-      const lang = document.createElement('span');
-      const isEnglish = node.subtitleLanguage === 'en';
-      lang.className = `subtitle-lang${isEnglish ? ' lang-en' : ''}`;
-      lang.textContent = node.subtitleLanguage.toUpperCase();
-      titleWrap.appendChild(lang);
-    }
+    renderSubtitleBadge(titleWrap, node.subtitleLanguage);
   } else if (node.type === 'file' && node.hasSubtitle === false) {
     const noSub = document.createElement('span');
     noSub.className = 'no-subtitle';
     noSub.textContent = '❌';
     noSub.title = 'No subtitle found';
     titleWrap.appendChild(noSub);
+  }
+
+  if (node.type === 'file') {
+    treeRowRefs.set(node.path, { titleWrap, node });
   }
 
   item.appendChild(titleWrap);
@@ -206,6 +231,7 @@ collapseAllBtn?.addEventListener('click', () => setAllFolders(false));
 async function loadTree() {
   try {
     setStatus('Loading…');
+    treeRowRefs.clear();
     const data = await fetchJSON('/api/tree');
     if (!data.exists) {
       treeEl.innerHTML = '';
@@ -243,28 +269,14 @@ async function sendSelection() {
     return;
   }
   try {
-    setStatus('Preparing…');
+    setStatus('Queuing…');
     const items = Array.from(selected.entries()).map(([p, v]) => ({ path: p, type: v.type }));
+    // The server queues these and dispatches them to subgen one at a time,
+    // waiting for each to actually finish before sending the next - this
+    // keeps progress tracking unambiguous (see /api/generate).
     const genRes = await postJSON('/api/generate', { items });
     if (!genRes.ok) throw new Error(`Generate HTTP ${genRes.status}`);
-
-    // Subgen's /batch endpoint accepts multiple paths in one call, pipe-separated.
-    const directoryParam = items
-      .map(i => `/content/${i.path}`.replace(/\/+$/, ''))
-      .join('|');
-    const encodedDirectory = encodeURIComponent(directoryParam);
-    const lang = encodeURIComponent(settings.defaultLanguage || 'en');
-    const remoteUrl = `http://${settings.serverHost}:${settings.serverPort}/batch?directory=${encodedDirectory}&forceLanguage=${lang}`;
-    console.log('[Generate Subs] Remote URL:', remoteUrl);
-    setStatus('Sending…');
-    try {
-      const req = fetch(remoteUrl, { method: 'POST' });
-      window._lastGenRequest = req;
-      req.catch(err => console.warn('[Generate Subs] Request error:', err));
-    } catch (ffErr) {
-      console.warn('[Generate Subs] Dispatch error:', ffErr);
-    }
-    setStatus('Sent');
+    setStatus('Queued');
     showProgressPanel();
     startProgressPolling();
   } catch (e) {
@@ -303,6 +315,7 @@ function showProgressPanel() { progressPanel.classList.remove('hidden'); }
 function statusBadgeClass(status) {
   if (status === 'done') return 'badge-done';
   if (status === 'skipped') return 'badge-skipped';
+  if (status === 'error') return 'badge-error';
   if (status === 'processing') return 'badge-processing';
   return 'badge-queued';
 }
@@ -326,6 +339,8 @@ function renderProgress(data) {
     li.appendChild(name);
     li.appendChild(badge);
     progressList.appendChild(li);
+
+    if (job.status === 'done') applySubtitleDone(job.relPath, job.language);
   });
 
   const groupEntries = Object.entries(data.groups || {});

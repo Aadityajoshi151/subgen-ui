@@ -23,10 +23,12 @@ mkdir -p content/docs && printf "Readme" > content/docs/readme.md
 ```
 
 ## Endpoints
-- `GET /api/tree` – Returns the directory tree under `content/`.
-- `POST /api/select` – JSON body `{ path, type }` returns `{ absolutePath, type }` and logs selection.
+- `GET /api/tree?path=<relPath>` – Returns the immediate children of a folder under `content/` (root when `path` is omitted). Loads one level at a time so browsing a large library stays fast.
 - `GET /api/settings` – Returns `{ exists, settings }`.
-- `POST /api/settings` – Saves `serverHost`, `serverPort`, `defaultLanguage` (ISO code) to `user-settings.json`.
+- `POST /api/settings` – Saves `serverHost`, `serverPort`, `defaultLanguage` (ISO code), `subgenContainerName` to `config/user-settings.json`.
+- `POST /api/generate` – JSON body `{ items: [{ path, type }] }`. Queues the selected files (expanding folders to their video files) and dispatches them to subgen one at a time.
+- `GET /api/progress` – Returns tracked job statuses (`queued`/`processing`/`done`/`skipped`/`error`) and live log-tailing status.
+- `POST /api/progress/clear` – Clears tracked jobs and the dispatch queue.
 
 ## Settings
 On first run, the app will ask for:
@@ -39,14 +41,21 @@ Languages stored as codes: `en, es, fr, de, hi, ja`.
 These are saved in `user-settings.json` at the project root. You can open the settings modal anytime via the Settings button.
 
 ## Generation
-Click "Generate Subs" after selecting a file or folder. The app will:
-1. Call `POST /api/select` to validate selection and receive the resolved absolute path (logged server-side).
-2. Issue a direct `POST` (no body) from the browser to:
-	`http://<serverHost>:<serverPort>/batch?directory=/content/<relativePath>&forceLanguage=<langCode>`
+Select one or more files/folders (checkboxes) and click "Generate Subs". The app will:
+1. Call `POST /api/generate`, which validates the selection, expands any selected folders into their individual video files, and queues all of them server-side.
+2. The server dispatches queued files to subgen's `/batch` endpoint **one at a time**:
+	`POST http://<serverHost>:<serverPort>/batch?directory=/content/<relativePath>&forceLanguage=<langCode>`
 
-The `directory` query parameter is container-relative (never the host absolute path). Root selection uses `/content`. If you encounter CORS issues from the browser, you can re-introduce a server-side proxy endpoint later.
+	It only sends the next file once the current one is confirmed finished (or skipped) via live log tailing — see Progress Tracking below. This is deliberate: subgen doesn't reliably report *which* file a given progress line belongs to, so sending one at a time (rather than one big multi-file request) keeps progress attribution unambiguous.
 
-Where `<langCode>` is the stored language (e.g. `en`). Ensure your Subgen server supports CORS if it is on a different origin; if not, proxy the request through the Express server.
+The `directory` query parameter is container-relative (never the host absolute path). `<langCode>` is the stored default language (e.g. `en`). Since this request now originates from the Express server rather than the browser, CORS is not a concern — subgen just needs to be network-reachable from the subgen-ui container/host.
+
+## Progress Tracking
+Subgen has no polling/status API, so live progress is optional and comes from tailing the subgen container's own logs over the Docker socket:
+- Set "Subgen Docker Container Name" in Settings (the name `docker ps` shows for it).
+- Mount `/var/run/docker.sock:/var/run/docker.sock:ro` into subgen-ui (see `docker-compose.yaml`).
+
+With that configured, each file shows live `queued → processing NN% → done` (or `skipped`, if subgen already had subtitles for it, or `error` if the request to subgen couldn't be sent). Without it, files still get dispatched correctly, you just won't see live percentages.
 
 ## Docker
 

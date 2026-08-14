@@ -246,85 +246,104 @@ app.post('/api/settings', (req, res) => {
   }
 });
 
-app.post('/api/select', (req, res) => {
-  const rel = (req.body && req.body.path) || '';
-  const full = safeResolveContent(rel);
-  if (!full) return res.status(400).json({ error: 'Invalid path' });
-  try {
-    const stat = fs.statSync(full);
-    const type = stat.isDirectory() ? 'folder' : 'file';
-    console.log('[Generate Subs] Selected:', { type, path: full });
-    return res.json({ ok: true, type, relPath: rel, absolutePath: full });
-  } catch {
-    return res.status(404).json({ error: 'Not found' });
-  }
-});
-
-// --- Progress tracking -----------------------------------------------
+// --- Progress tracking + dispatch ------------------------------------
 // Subgen has no polling/status API, so progress comes entirely from tailing
-// the subgen container's own logs (via Docker socket, optional). Its
-// progress lines don't name the file being processed, so with
-// CONCURRENT_TRANSCRIPTIONS=1 the oldest still-open tracked job is assumed
-// to be the one currently running, and a job is marked done once its
-// progress hits 100%. The one log line that DOES name a specific file is
-// "Skipping <file>: <reason>" (subgen already has subtitles for it, etc.) -
-// that has to be caught and excluded from the "oldest still-open" search,
-// otherwise a skipped file never gets its own file-start and the next real
-// file's progress gets misattributed to it instead. This all resets on
-// server restart.
-const trackedJobs = new Map(); // relPath -> { relPath, type, groupPath, status, percent, skipReason, queuedAt, completedAt }
+// the subgen container's own logs (via Docker socket, optional), and those
+// log lines mostly don't name the file being processed. Rather than guess
+// which submitted file a given log line belongs to (which broke down: a
+// multi-file /batch request doesn't guarantee subgen works through them in
+// submission order, and any mismatch - a skip, a file never actually
+// reaching subgen, etc. - misattributes progress/completion to the wrong
+// job), the server dispatches selected files to subgen's /batch endpoint
+// ONE AT A TIME, itself, and only sends the next once the current one is
+// confirmed closed out (via 100% progress or a matching "Skipping <file>:"
+// line). There is then never more than one file in flight, so whatever log
+// activity we see unambiguously belongs to it. This all resets on server
+// restart.
+const trackedJobs = new Map(); // relPath -> { relPath, type, groupPath, status, percent, language, skipReason, queuedAt, completedAt }
 let submitCounter = 0;
 let subgenLogStatus = { state: 'disabled', detail: null, containerName: null };
-let activeJobPath = null; // relPath of the job assumed to be running right now, per the log stream
+let activeJobPath = null; // relPath of the single file we've dispatched and are waiting on
+const dispatchQueue = []; // relPaths waiting to be sent to subgen
 
 function isClosed(status) {
   return status === 'done' || status === 'skipped';
 }
 
-function findJobByBasename(name) {
-  for (const job of trackedJobs.values()) {
-    if (path.basename(job.relPath) === name) return job;
+async function dispatchToSubgen(relPath) {
+  const settings = readSettings();
+  if (!settings || !settings.serverHost || !settings.serverPort) {
+    console.warn('[Generate Subs] Cannot dispatch, subgen server not configured:', relPath);
+    return false;
   }
-  return null;
+  const directoryParam = `/content/${relPath}`;
+  const lang = settings.defaultLanguage || 'en';
+  const url = `http://${settings.serverHost}:${settings.serverPort}/batch?directory=${encodeURIComponent(directoryParam)}&forceLanguage=${encodeURIComponent(lang)}`;
+  try {
+    console.log('[Generate Subs] Dispatching:', relPath);
+    const res = await fetch(url, { method: 'POST' });
+    if (!res.ok) console.warn('[Generate Subs] Dispatch got non-OK response:', res.status, relPath);
+    return true;
+  } catch (err) {
+    console.warn('[Generate Subs] Dispatch failed:', relPath, err.message);
+    return false;
+  }
+}
+
+async function maybeDispatchNext() {
+  if (activeJobPath) return; // something already in flight, wait for it to close out
+  const nextPath = dispatchQueue.shift();
+  if (!nextPath) return;
+  const job = trackedJobs.get(nextPath);
+  if (!job || isClosed(job.status)) {
+    maybeDispatchNext();
+    return;
+  }
+  activeJobPath = nextPath;
+  job.status = 'processing';
+  job.percent = 0;
+  // Subgen doesn't report back what language it actually wrote, but we know
+  // what we asked for - use that so the UI can flip a file's icon to the
+  // right language badge the moment it's done, without re-probing the file.
+  const dispatchSettings = readSettings();
+  job.language = (dispatchSettings && dispatchSettings.defaultLanguage) || 'en';
+  const ok = await dispatchToSubgen(nextPath);
+  if (!ok) {
+    job.status = 'error';
+    job.completedAt = Date.now();
+    activeJobPath = null;
+    maybeDispatchNext();
+  }
 }
 
 function handleSubgenLogEvent(event) {
+  if (!activeJobPath) return; // nothing dispatched by us right now; ignore unrelated activity
+  const job = trackedJobs.get(activeJobPath);
+  if (!job || isClosed(job.status)) return;
+
   if (event.type === 'skip') {
-    const job = findJobByBasename(event.name);
-    if (job && !isClosed(job.status)) {
-      job.status = 'skipped';
-      job.skipReason = event.reason || null;
-      job.completedAt = job.completedAt || Date.now();
-      if (activeJobPath === job.relPath) activeJobPath = null;
-    }
+    if (path.basename(job.relPath) !== event.name) return; // not the file we dispatched
+    job.status = 'skipped';
+    job.skipReason = event.reason || null;
+    job.completedAt = job.completedAt || Date.now();
+    activeJobPath = null;
+    maybeDispatchNext();
   } else if (event.type === 'file-start') {
-    if (activeJobPath) {
-      const prev = trackedJobs.get(activeJobPath);
-      if (prev && !isClosed(prev.status)) {
-        prev.status = 'done';
-        prev.percent = 100;
-        prev.completedAt = prev.completedAt || Date.now();
-      }
+    if (job.status === 'queued') {
+      job.status = 'processing';
+      job.percent = 0;
     }
-    const jobsInOrder = Array.from(trackedJobs.values()).sort((a, b) => a.order - b.order);
-    const next = jobsInOrder.find(j => !isClosed(j.status));
-    activeJobPath = next ? next.relPath : null;
-    if (next) {
-      next.status = 'processing';
-      next.percent = 0;
-    }
-  } else if (event.type === 'progress' && activeJobPath) {
-    const job = trackedJobs.get(activeJobPath);
-    if (job && !isClosed(job.status)) {
-      job.percent = event.percent;
-      if (event.percent >= 100) {
-        // The transcription pass itself is done. There's no dedicated
-        // "finished" log line, so treat 100% as done outright.
-        job.status = 'done';
-        job.completedAt = job.completedAt || Date.now();
-      } else {
-        job.status = 'processing';
-      }
+  } else if (event.type === 'progress') {
+    job.percent = event.percent;
+    if (event.percent >= 100) {
+      // The transcription pass itself is done. There's no dedicated
+      // "finished" log line, so treat 100% as done outright.
+      job.status = 'done';
+      job.completedAt = job.completedAt || Date.now();
+      activeJobPath = null;
+      maybeDispatchNext();
+    } else {
+      job.status = 'processing';
     }
   }
 }
@@ -353,18 +372,20 @@ app.post('/api/generate', (req, res) => {
       const files = collectVideoFiles(full, CONTENT_DIR);
       for (const f of files) {
         submitCounter += 1;
-        const job = { relPath: f, type: 'file', groupPath: rel, status: 'queued', percent: null, skipReason: null, order: submitCounter, queuedAt: Date.now(), completedAt: null };
+        const job = { relPath: f, type: 'file', groupPath: rel, status: 'queued', percent: null, language: null, skipReason: null, order: submitCounter, queuedAt: Date.now(), completedAt: null };
         trackedJobs.set(f, job);
         registered.push(job);
       }
     } else {
       submitCounter += 1;
-      const job = { relPath: rel, type: 'file', groupPath: null, status: 'queued', percent: null, skipReason: null, order: submitCounter, queuedAt: Date.now(), completedAt: null };
+      const job = { relPath: rel, type: 'file', groupPath: null, status: 'queued', percent: null, language: null, skipReason: null, order: submitCounter, queuedAt: Date.now(), completedAt: null };
       trackedJobs.set(rel, job);
       registered.push(job);
     }
   }
   console.log('[Generate Subs] Registered for tracking:', registered.map(r => r.relPath));
+  dispatchQueue.push(...registered.map(r => r.relPath));
+  maybeDispatchNext();
   res.json({ ok: true, registered: registered.length });
 });
 
@@ -386,6 +407,8 @@ app.get('/api/progress', (req, res) => {
 
 app.post('/api/progress/clear', (req, res) => {
   trackedJobs.clear();
+  dispatchQueue.length = 0;
+  activeJobPath = null;
   res.json({ ok: true });
 });
 
