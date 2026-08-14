@@ -351,23 +351,18 @@ function renderProgress(data) {
   progressLogStatusEl.textContent = labels[logStatus.state] || '';
   progressLogStatusEl.title = logStatus.detail || '';
 
-  renderProgressBanner(logStatus, data.webhookConfigured, total);
+  renderProgressBanner(logStatus);
 }
 
-function renderProgressBanner(logStatus, webhookConfigured, totalJobs) {
-  const webhookUrl = `${window.location.origin}/api/webhook/subgen-complete`;
+function renderProgressBanner(logStatus) {
   const lines = [];
 
   if (logStatus.state === 'disabled') {
-    lines.push('Live % progress is off — set "Subgen Docker Container Name" in Settings to tail its logs.');
+    lines.push('Live progress is off — set "Subgen Docker Container Name" in Settings to tail its logs. A video is marked done once its progress hits 100%.');
   } else if (logStatus.state === 'error') {
     lines.push(`Can't read subgen's logs (${logStatus.detail || 'unknown error'}). Check the container name and that /var/run/docker.sock is mounted into subgen-ui.`);
   } else if (logStatus.state === 'disconnected') {
     lines.push('Lost connection to subgen’s logs, reconnecting…');
-  }
-
-  if (totalJobs > 0 && !webhookConfigured) {
-    lines.push(`No completion signal received yet — without it, finished videos never flip to "done". Add WEBHOOK_URL_COMPLETED=${webhookUrl} to your subgen container's environment.`);
   }
 
   if (lines.length === 0) {

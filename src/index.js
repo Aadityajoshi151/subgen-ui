@@ -261,15 +261,13 @@ app.post('/api/select', (req, res) => {
 });
 
 // --- Progress tracking -----------------------------------------------
-// Subgen has no polling/status API. Two sources feed progress here:
-// 1. WEBHOOK_URL_COMPLETED - subgen POSTs {file, subtitle, language} when a
-//    file finishes; reliable but binary (no percentage, fires only on success).
-// 2. Tailing the subgen container's own logs (via Docker socket, optional) -
-//    subgen's progress lines don't name the file being processed, so with
-//    CONCURRENT_TRANSCRIPTIONS=1 the oldest still-open tracked job is
-//    assumed to be the one currently running.
-// This all resets on server restart.
-const trackedJobs = new Map(); // relPath -> { relPath, type, groupPath, status, percent, subtitle, language, queuedAt, completedAt }
+// Subgen has no polling/status API, so progress comes entirely from tailing
+// the subgen container's own logs (via Docker socket, optional). Its
+// progress lines don't name the file being processed, so with
+// CONCURRENT_TRANSCRIPTIONS=1 the oldest still-open tracked job is assumed
+// to be the one currently running, and a job is marked done once its
+// progress hits 100%. This all resets on server restart.
+const trackedJobs = new Map(); // relPath -> { relPath, type, groupPath, status, percent, queuedAt, completedAt }
 let submitCounter = 0;
 let subgenLogStatus = { state: 'disabled', detail: null, containerName: null };
 let activeJobPath = null; // relPath of the job assumed to be running right now, per the log stream
@@ -293,9 +291,16 @@ function handleSubgenLogEvent(event) {
     }
   } else if (event.type === 'progress' && activeJobPath) {
     const job = trackedJobs.get(activeJobPath);
-    if (job) {
-      job.status = 'processing';
+    if (job && job.status !== 'done') {
       job.percent = event.percent;
+      if (event.percent >= 100) {
+        // The transcription pass itself is done. There's no dedicated
+        // "finished" log line, so treat 100% as done outright.
+        job.status = 'done';
+        job.completedAt = job.completedAt || Date.now();
+      } else {
+        job.status = 'processing';
+      }
     }
   }
 }
@@ -324,13 +329,13 @@ app.post('/api/generate', (req, res) => {
       const files = collectVideoFiles(full, CONTENT_DIR);
       for (const f of files) {
         submitCounter += 1;
-        const job = { relPath: f, type: 'file', groupPath: rel, status: 'queued', percent: null, subtitle: null, language: null, order: submitCounter, queuedAt: Date.now(), completedAt: null };
+        const job = { relPath: f, type: 'file', groupPath: rel, status: 'queued', percent: null, order: submitCounter, queuedAt: Date.now(), completedAt: null };
         trackedJobs.set(f, job);
         registered.push(job);
       }
     } else {
       submitCounter += 1;
-      const job = { relPath: rel, type: 'file', groupPath: null, status: 'queued', percent: null, subtitle: null, language: null, order: submitCounter, queuedAt: Date.now(), completedAt: null };
+      const job = { relPath: rel, type: 'file', groupPath: null, status: 'queued', percent: null, order: submitCounter, queuedAt: Date.now(), completedAt: null };
       trackedJobs.set(rel, job);
       registered.push(job);
     }
@@ -339,33 +344,11 @@ app.post('/api/generate', (req, res) => {
   res.json({ ok: true, registered: registered.length });
 });
 
-let webhookReceivedCount = 0;
-
-app.post('/api/webhook/subgen-complete', (req, res) => {
-  webhookReceivedCount += 1;
-  const body = req.body || {};
-  const filePath = body.file || '';
-  // Subgen reports the container path it was given, e.g. "/content/Show/ep1.mkv".
-  const relPath = filePath.replace(/^\/?content\/?/, '');
-  const job = trackedJobs.get(relPath);
-  if (job) {
-    job.status = 'done';
-    job.percent = 100;
-    job.subtitle = body.subtitle || null;
-    job.language = body.language || null;
-    job.completedAt = Date.now();
-    console.log('[Generate Subs] Completed:', relPath);
-  } else {
-    console.log('[Generate Subs] Webhook for untracked file:', filePath);
-  }
-  res.json({ ok: true });
-});
-
 app.get('/api/progress', (req, res) => {
   // No heuristic guessing here: a job's status only ever reflects what we
-  // actually know (log-tailing events for 'processing'/percent, the
-  // completion webhook for 'done'). Faking a status when neither source is
-  // configured just hides the fact that nothing is actually being tracked.
+  // actually know from tailing subgen's logs (processing/percent, and done
+  // once percent hits 100). Faking a status when logs aren't configured
+  // just hides the fact that nothing is actually being tracked.
   const jobs = Array.from(trackedJobs.values()).sort((a, b) => a.order - b.order);
   const groups = {};
   for (const j of jobs) {
@@ -374,12 +357,7 @@ app.get('/api/progress', (req, res) => {
     groups[j.groupPath].total += 1;
     if (j.status === 'done') groups[j.groupPath].done += 1;
   }
-  res.json({
-    jobs,
-    groups,
-    logStatus: subgenLogStatus,
-    webhookConfigured: webhookReceivedCount > 0
-  });
+  res.json({ jobs, groups, logStatus: subgenLogStatus });
 });
 
 app.post('/api/progress/clear', (req, res) => {
