@@ -92,7 +92,7 @@ function buildItemRow(node) {
   const name = document.createElement('span'); name.className = 'name'; name.textContent = node.name;
   titleWrap.appendChild(name);
 
-  if (node.type === 'file' && node.hasSubtitle) {
+  if (node.type === 'file' && node.hasSubtitle === true) {
     const sub = document.createElement('span');
     sub.className = 'has-subtitle';
     sub.textContent = '💬';
@@ -106,6 +106,12 @@ function buildItemRow(node) {
       lang.textContent = node.subtitleLanguage.toUpperCase();
       titleWrap.appendChild(lang);
     }
+  } else if (node.type === 'file' && node.hasSubtitle === false) {
+    const noSub = document.createElement('span');
+    noSub.className = 'no-subtitle';
+    noSub.textContent = '❌';
+    noSub.title = 'No subtitle found';
+    titleWrap.appendChild(noSub);
   }
 
   item.appendChild(titleWrap);
@@ -296,6 +302,7 @@ function showProgressPanel() { progressPanel.classList.remove('hidden'); }
 
 function statusBadgeClass(status) {
   if (status === 'done') return 'badge-done';
+  if (status === 'skipped') return 'badge-skipped';
   if (status === 'processing') return 'badge-processing';
   return 'badge-queued';
 }
@@ -315,6 +322,7 @@ function renderProgress(data) {
     const badge = document.createElement('span');
     badge.className = `badge ${statusBadgeClass(job.status)}`;
     badge.textContent = job.status === 'processing' && job.percent != null ? `${job.percent}%` : job.status;
+    if (job.status === 'skipped' && job.skipReason) badge.title = job.skipReason;
     li.appendChild(name);
     li.appendChild(badge);
     progressList.appendChild(li);
@@ -342,7 +350,7 @@ function renderProgress(data) {
   }
 
   const total = jobs.length;
-  const done = jobs.filter(j => j.status === 'done').length;
+  const done = jobs.filter(j => j.status === 'done' || j.status === 'skipped').length;
   progressSummary.textContent = total ? `${done}/${total} done` : '';
 
   const logStatus = data.logStatus || { state: 'disabled' };

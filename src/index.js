@@ -266,24 +266,48 @@ app.post('/api/select', (req, res) => {
 // progress lines don't name the file being processed, so with
 // CONCURRENT_TRANSCRIPTIONS=1 the oldest still-open tracked job is assumed
 // to be the one currently running, and a job is marked done once its
-// progress hits 100%. This all resets on server restart.
-const trackedJobs = new Map(); // relPath -> { relPath, type, groupPath, status, percent, queuedAt, completedAt }
+// progress hits 100%. The one log line that DOES name a specific file is
+// "Skipping <file>: <reason>" (subgen already has subtitles for it, etc.) -
+// that has to be caught and excluded from the "oldest still-open" search,
+// otherwise a skipped file never gets its own file-start and the next real
+// file's progress gets misattributed to it instead. This all resets on
+// server restart.
+const trackedJobs = new Map(); // relPath -> { relPath, type, groupPath, status, percent, skipReason, queuedAt, completedAt }
 let submitCounter = 0;
 let subgenLogStatus = { state: 'disabled', detail: null, containerName: null };
 let activeJobPath = null; // relPath of the job assumed to be running right now, per the log stream
 
+function isClosed(status) {
+  return status === 'done' || status === 'skipped';
+}
+
+function findJobByBasename(name) {
+  for (const job of trackedJobs.values()) {
+    if (path.basename(job.relPath) === name) return job;
+  }
+  return null;
+}
+
 function handleSubgenLogEvent(event) {
-  if (event.type === 'file-start') {
+  if (event.type === 'skip') {
+    const job = findJobByBasename(event.name);
+    if (job && !isClosed(job.status)) {
+      job.status = 'skipped';
+      job.skipReason = event.reason || null;
+      job.completedAt = job.completedAt || Date.now();
+      if (activeJobPath === job.relPath) activeJobPath = null;
+    }
+  } else if (event.type === 'file-start') {
     if (activeJobPath) {
       const prev = trackedJobs.get(activeJobPath);
-      if (prev && prev.status !== 'done') {
+      if (prev && !isClosed(prev.status)) {
         prev.status = 'done';
         prev.percent = 100;
         prev.completedAt = prev.completedAt || Date.now();
       }
     }
     const jobsInOrder = Array.from(trackedJobs.values()).sort((a, b) => a.order - b.order);
-    const next = jobsInOrder.find(j => j.status !== 'done');
+    const next = jobsInOrder.find(j => !isClosed(j.status));
     activeJobPath = next ? next.relPath : null;
     if (next) {
       next.status = 'processing';
@@ -291,7 +315,7 @@ function handleSubgenLogEvent(event) {
     }
   } else if (event.type === 'progress' && activeJobPath) {
     const job = trackedJobs.get(activeJobPath);
-    if (job && job.status !== 'done') {
+    if (job && !isClosed(job.status)) {
       job.percent = event.percent;
       if (event.percent >= 100) {
         // The transcription pass itself is done. There's no dedicated
@@ -329,13 +353,13 @@ app.post('/api/generate', (req, res) => {
       const files = collectVideoFiles(full, CONTENT_DIR);
       for (const f of files) {
         submitCounter += 1;
-        const job = { relPath: f, type: 'file', groupPath: rel, status: 'queued', percent: null, order: submitCounter, queuedAt: Date.now(), completedAt: null };
+        const job = { relPath: f, type: 'file', groupPath: rel, status: 'queued', percent: null, skipReason: null, order: submitCounter, queuedAt: Date.now(), completedAt: null };
         trackedJobs.set(f, job);
         registered.push(job);
       }
     } else {
       submitCounter += 1;
-      const job = { relPath: rel, type: 'file', groupPath: null, status: 'queued', percent: null, order: submitCounter, queuedAt: Date.now(), completedAt: null };
+      const job = { relPath: rel, type: 'file', groupPath: null, status: 'queued', percent: null, skipReason: null, order: submitCounter, queuedAt: Date.now(), completedAt: null };
       trackedJobs.set(rel, job);
       registered.push(job);
     }
@@ -355,7 +379,7 @@ app.get('/api/progress', (req, res) => {
     if (!j.groupPath) continue;
     if (!groups[j.groupPath]) groups[j.groupPath] = { total: 0, done: 0 };
     groups[j.groupPath].total += 1;
-    if (j.status === 'done') groups[j.groupPath].done += 1;
+    if (isClosed(j.status)) groups[j.groupPath].done += 1;
   }
   res.json({ jobs, groups, logStatus: subgenLogStatus });
 });

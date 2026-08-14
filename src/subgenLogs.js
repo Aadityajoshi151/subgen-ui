@@ -13,8 +13,15 @@ const Docker = require('dockerode');
 //     the oldest still-open tracked job is assumed to be the one running).
 //   - "Transcribe: NN%|" gives the live percentage for whichever job is
 //     currently marked "processing".
+//   - "Skipping <file>: <reason>" (from subgen's should_skip_file, e.g. a
+//     file that already has subtitles) names the exact file via a normal
+//     logging.info() call, so unlike the two lines above it CAN be matched
+//     by filename. This matters: without catching it, a skipped file would
+//     never get a "file-start" of its own, so the next real file's progress
+//     would get misattributed to the (untouched) skipped file instead.
 const FILE_START_RE = /Processing audio with duration/g;
 const PROGRESS_RE = /Transcribe:\s*(\d+)%\|/g;
+const SKIP_RE = /Skipping\s+(.+?):\s*([^\r\n]*)/g;
 
 function parseChunk(text) {
   const events = [];
@@ -26,6 +33,9 @@ function parseChunk(text) {
   if (progressMatches.length > 0) {
     const last = progressMatches[progressMatches.length - 1];
     events.push({ type: 'progress', percent: Number(last[1]) });
+  }
+  for (const m of text.matchAll(SKIP_RE)) {
+    events.push({ type: 'skip', name: m[1].trim(), reason: m[2].trim() });
   }
   return events;
 }
@@ -109,7 +119,8 @@ function attach(containerName) {
 }
 
 // Switches log tailing to a new container name (or stops it if name is empty).
-// onEvent receives { type: 'file-start' } or { type: 'progress', percent }.
+// onEvent receives { type: 'file-start' }, { type: 'progress', percent }, or
+// { type: 'skip', name, reason }.
 // onStatus receives { state: 'connected'|'disconnected'|'error', detail?, containerName }.
 function configure(containerName, onEvent, onStatus) {
   onEventCallback = onEvent;
